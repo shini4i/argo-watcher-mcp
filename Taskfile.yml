@@ -1,0 +1,28 @@
+version: '3'
+
+tasks:
+  deps:
+    desc: "Install project dependencies using Poetry."
+    cmds:
+      - poetry install
+    sources:
+      - pyproject.toml
+      - poetry.lock
+
+  run:
+    desc: "Run the argo-watcher-mcp server."
+    deps: [deps]
+    env:
+      ARGO_WATCHER_URL: http://localhost:8080
+    cmds:
+      - poetry run mcp run --transport sse src/argo_watcher_mcp/main.py:mcp
+
+  bump-patch:
+    desc: "Bump the patch version"
+    cmds:
+      - bump2version patch --allow-dirty
+
+  bump-minor:
+    desc: "Bump the minor version"
+    cmds:
+      - bump2version minor --allow-dirty

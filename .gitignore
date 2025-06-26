@@ -1,0 +1,9 @@
+.idea/
+.vscode/
+
+.task/
+
+.env
+.envrc
+
+**/__pycache__/

@@ -1,0 +1,26 @@
+[project]
+name = "argo-watcher-mcp"
+version = "0.1.0"
+description = "A PoC MCP server for argo-watcher"
+authors = [
+    {name = "Vadim Gedz",email = "github@shini4i.dev"}
+]
+license = {text = "MIT"}
+requires-python = ">=3.13"
+dependencies = [
+    "mcp[cli] (>=1.9.4,<2.0.0)",
+    "httpx (>=0.28.1,<0.29.0)",
+    "pydantic (>=2.11.7,<3.0.0)",
+    "fastapi (>=0.115.13,<0.116.0)",
+]
+
+
+[build-system]
+requires = ["poetry-core>=2.0.0,<3.0.0"]
+build-backend = "poetry.core.masonry.api"
+
+[tool.poetry.group.dev.dependencies]
+pytest = "^8.4.1"
+respx = "^0.22.0"
+freezegun = "^1.5.2"
+pytest-cov = "^6.2.1"
