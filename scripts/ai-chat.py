@@ -7,19 +7,20 @@ import asyncio
 import json
 import logging
 import os
-from typing import Any, Dict, List
+from typing import Any
+from typing import Dict
+from typing import List
 from urllib.parse import urlencode
 
 import click
 from icecream import ic
 from mcp.client.session import ClientSession
 from mcp.client.sse import sse_client
-from openai import AsyncOpenAI, OpenAIError
-from openai.types.chat import (
-    ChatCompletionMessage,
-    ChatCompletionMessageParam,
-    ChatCompletionToolParam,
-)
+from openai import AsyncOpenAI
+from openai import OpenAIError
+from openai.types.chat import ChatCompletionMessage
+from openai.types.chat import ChatCompletionMessageParam
+from openai.types.chat import ChatCompletionToolParam
 from rich.console import Console
 from rich.markdown import Markdown
 
@@ -47,9 +48,7 @@ class ArgoWatcherClient:
         openai_tools: List[ChatCompletionToolParam] = []
         try:
             async with sse_client(url=init_url) as (read_stream, write_stream):
-                session = ClientSession(
-                    read_stream=read_stream, write_stream=write_stream
-                )
+                session = ClientSession(read_stream=read_stream, write_stream=write_stream)
                 async with session:
                     await session.initialize()
                     mcp_tools_response = await session.list_tools()
@@ -75,14 +74,10 @@ class ArgoWatcherClient:
         init_url = self._get_init_url()
         try:
             async with sse_client(url=init_url) as (read_stream, write_stream):
-                session = ClientSession(
-                    read_stream=read_stream, write_stream=write_stream
-                )
+                session = ClientSession(read_stream=read_stream, write_stream=write_stream)
                 async with session:
                     await session.initialize()
-                    mcp_tool_result = await session.call_tool(
-                        name=tool_name, arguments=tool_args
-                    )
+                    mcp_tool_result = await session.call_tool(name=tool_name, arguments=tool_args)
                     if mcp_tool_result and mcp_tool_result.content:
                         all_results = [
                             json.loads(item.text)
@@ -99,10 +94,10 @@ class ChatManager:
     """Manages the interactive chat session, conversation history, and LLM interaction."""
 
     def __init__(
-            self,
-            mcp_client: ArgoWatcherClient,
-            llm_client: AsyncOpenAI,
-            console: Console,
+        self,
+        mcp_client: ArgoWatcherClient,
+        llm_client: AsyncOpenAI,
+        console: Console,
     ):
         self.mcp_client = mcp_client
         self.llm_client = llm_client
@@ -115,9 +110,7 @@ class ChatManager:
         self.console.print("Discovering tools from MCP server...")
         self.tools = await self.mcp_client.discover_tools()
         if not self.tools:
-            raise click.ClickException(
-                "No tools found on the server. Cannot start chat."
-            )
+            raise click.ClickException("No tools found on the server. Cannot start chat.")
         self.console.print("[bold green]✔ Tools discovered successfully.[/bold green]")
 
     def _add_message_to_history(self, message: ChatCompletionMessage):
@@ -128,9 +121,7 @@ class ChatManager:
             new_message["content"] = message.content
 
         if message.tool_calls:
-            new_message["tool_calls"] = [
-                tool_call.model_dump() for tool_call in message.tool_calls
-            ]
+            new_message["tool_calls"] = [tool_call.model_dump() for tool_call in message.tool_calls]
 
         self.messages.append(new_message)  # type: ignore
 
@@ -162,7 +153,7 @@ class ChatManager:
             )
 
         with self.console.status(
-                "[bold blue]Summarizing tool results...[/bold blue]", spinner="dots"
+            "[bold blue]Summarizing tool results...[/bold blue]", spinner="dots"
         ):
             second_response = await self.llm_client.chat.completions.create(
                 model="gpt-4o",
@@ -189,9 +180,7 @@ class ChatManager:
 
                 self.messages.append({"role": "user", "content": prompt})  # type: ignore
 
-                with self.console.status(
-                        "[bold blue]Thinking...[/bold blue]", spinner="dots"
-                ):
+                with self.console.status("[bold blue]Thinking...[/bold blue]", spinner="dots"):
                     response = await self.llm_client.chat.completions.create(
                         model="gpt-4o",
                         messages=self.messages,
@@ -216,9 +205,7 @@ class ChatManager:
                 self.console.print("\n[bold]Goodbye![/bold]")
                 break
             except OpenAIError as e:
-                self.console.print(
-                    f"\n[bold red]An OpenAI API error occurred: {e}[/bold red]"
-                )
+                self.console.print(f"\n[bold red]An OpenAI API error occurred: {e}[/bold red]")
                 self.messages.pop()
             except Exception as e:
                 self.console.print(
@@ -237,9 +224,7 @@ def cli(debug):
     logging.getLogger("httpx").setLevel(logging.WARNING)
 
     if not os.getenv("OPENAI_API_KEY"):
-        raise click.ClickException(
-            "The OPENAI_API_KEY environment variable is not set."
-        )
+        raise click.ClickException("The OPENAI_API_KEY environment variable is not set.")
 
     try:
         llm_client = AsyncOpenAI()

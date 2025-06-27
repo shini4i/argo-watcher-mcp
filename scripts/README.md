@@ -69,4 +69,3 @@ The script is built using a modern, object-oriented approach for a clean and mai
     ./scripts/ai-chat.py --debug
     ```
     Once running, you can type your questions at the prompt. Type `exit` or `quit` to end the session.
-
