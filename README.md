@@ -71,7 +71,11 @@ This section outlines the full process for setting up the environment and runnin
 
     The script will enter an interactive loop. You can now ask questions about your deployments in natural language.
 
+<div align="center">
+
 <img src="https://raw.githubusercontent.com/shini4i/assets/main/src/argo-watcher-mcp/argo-watcher-mcp-chat.png" alt="Showcase" height="441" width="680">
+
+</div>
 
 ## Contributing
 
