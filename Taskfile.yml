@@ -4,7 +4,7 @@ tasks:
   deps:
     desc: "Install project dependencies using Poetry."
     cmds:
-      - poetry install
+      - poetry install --with dev,chat
     sources:
       - pyproject.toml
       - poetry.lock

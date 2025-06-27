@@ -3,6 +3,7 @@
 """
 An interactive, class-based command-line chat application for the ArgoWatcherMCP server.
 """
+
 import asyncio
 import json
 import logging
@@ -133,7 +134,25 @@ class ChatManager:
 
         for tool_call in response_message.tool_calls:
             function_name = tool_call.function.name
-            function_args = json.loads(tool_call.function.arguments)
+            try:
+                function_args = json.loads(tool_call.function.arguments)
+            except json.JSONDecodeError:
+                error_message = (
+                    f"[bold red]Error: LLM returned malformed JSON for tool "
+                    f"'{function_name}' arguments.[/bold red]"
+                )
+                self.console.print(error_message)
+                # Add an error message to the history for this specific tool call
+                self.messages.append(
+                    {  # type: ignore
+                        "tool_call_id": tool_call.id,
+                        "role": "tool",
+                        "name": function_name,
+                        "content": json.dumps({"error": "Malformed JSON arguments from LLM."}),
+                    }
+                )
+                continue  # Skip this tool call and proceed to the next, if any
+
             ic("LLM wants to call:", function_name, function_args)
 
             function_response_str = await self.mcp_client.execute_tool(
@@ -172,13 +191,16 @@ class ChatManager:
         )
 
         while True:
-            try:
-                prompt = self.console.input("[bold yellow]You: [/bold yellow]")
-                if prompt.lower() in ["exit", "quit"]:
-                    self.console.print("[bold]Goodbye![/bold]")
-                    break
+            prompt = self.console.input("[bold yellow]You: [/bold yellow]")
+            if prompt.lower() in ["exit", "quit"]:
+                self.console.print("[bold]Goodbye![/bold]")
+                break
 
-                self.messages.append({"role": "user", "content": prompt})  # type: ignore
+            user_message = {"role": "user", "content": prompt}
+
+            try:
+                # Add user message to history before making the API call.
+                self.messages.append(user_message)  # type: ignore
 
                 with self.console.status("[bold blue]Thinking...[/bold blue]", spinner="dots"):
                     response = await self.llm_client.chat.completions.create(
@@ -204,13 +226,17 @@ class ChatManager:
             except (KeyboardInterrupt, EOFError):
                 self.console.print("\n[bold]Goodbye![/bold]")
                 break
-            except OpenAIError as e:
-                self.console.print(f"\n[bold red]An OpenAI API error occurred: {e}[/bold red]")
-                self.messages.pop()
             except Exception as e:
-                self.console.print(
-                    f"\n[bold red]An unexpected error occurred during the chat: {e}[/bold red]"
-                )
+                # On any error, remove the last user message to keep history consistent.
+                if self.messages and self.messages[-1] == user_message:
+                    self.messages.pop()
+
+                if isinstance(e, OpenAIError):
+                    self.console.print(f"\n[bold red]An OpenAI API error occurred: {e}[/bold red]")
+                else:
+                    self.console.print(
+                        f"\n[bold red]An unexpected error occurred during the chat: {e}[/bold red]"
+                    )
 
 
 @click.command()
@@ -234,9 +260,8 @@ def cli(debug):
 
         asyncio.run(chat_manager.start_chat())
 
-    except click.ClickException:
-        raise
     except Exception as e:
+        # Let click handle all exceptions for consistent output.
         raise click.ClickException(f"Failed to start the application: {e}")
 
 
