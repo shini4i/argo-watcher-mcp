@@ -26,3 +26,10 @@ tasks:
     desc: "Bump the minor version"
     cmds:
       - bump2version minor --allow-dirty
+
+  chat:
+    desc: "Launch interactive chat with OpenAI"
+    cmds:
+      - ./scripts/ai-chat.py
+    requires:
+      vars: [OPENAI_API_KEY]
