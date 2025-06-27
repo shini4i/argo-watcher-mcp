@@ -24,3 +24,9 @@ pytest = "^8.4.1"
 respx = "^0.22.0"
 freezegun = "^1.5.2"
 pytest-cov = "^6.2.1"
+
+[tool.poetry.group.chat.dependencies]
+openai = "^1.92.2"
+click = "^8.2.1"
+icecream = "^2.1.5"
+rich = "^14.0.0"

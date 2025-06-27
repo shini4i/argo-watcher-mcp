@@ -1,41 +1,71 @@
-# ArgoWatcherMCP Test Script
+# Argo Watcher MCP - Client Scripts
 
-This directory contains `test.py`, an integration test client for the ArgoWatcherMCP server.
+This document describes the client scripts available in this repository for interacting with the Argo Watcher MCP server.
 
-## Purpose
+---
 
-The primary goal of this script is to provide an end-to-end test of the server's tools and functionality by simulating a client interaction. It serves as the canonical example for how to programmatically interact with an `mcp-server` using the `mcp==1.9.4` Python SDK, as the required process is non-trivial.
+## Integration Test Script (`test.py`)
 
-## Technical Implementation
+This script provides an end-to-end test of the server's tools and functionality by simulating a client interaction. It serves as the canonical example for how to programmatically interact with an `mcp-server` using the `mcp==1.9.4` Python SDK.
 
-The `mcp==1.9.4` library does not provide a single, high-level client object that handles both networking and protocol logic. Instead, the SDK is designed with a two-layer architecture that must be composed by the developer.
+### Technical Implementation
 
-1.  **Transport Layer (`sse_client`):** Found in `mcp.client.sse`, this context manager handles the low-level network connection via Server-Sent Events (SSE). It manages the connection lifecycle and provides a pair of in-memory streams for reading and writing data.
+The `mcp==1.9.4` library uses a two-layer architecture that must be composed by the developer:
 
-2.  **Session Layer (`ClientSession`):** Found in `mcp.client.session`, this class implements the logical Model Context Protocol. It takes the I/O streams from the transport layer and exposes high-level methods like `.initialize()`, `.list_tools()`, and `.call_tool()`.
+1.  **Transport Layer (`sse_client`):** Handles the low-level network connection via Server-Sent Events (SSE).
+2.  **Session Layer (`ClientSession`):** Implements the logical Model Context Protocol and exposes high-level methods like `.initialize()`, `.list_tools()`, and `.call_tool()`.
 
-The `test.py` script correctly implements this two-layer architecture.
+The `test.py` script correctly implements this architecture, including the mandatory multi-stage protocol handshake.
 
-### Protocol Handshake
+### Usage
 
-A successful connection requires a specific, multi-stage handshake which is handled automatically by the `ClientSession`'s `.initialize()` method:
-
-1.  **Connect (`GET`):** The client opens a persistent SSE stream to `/sse` to receive a unique session URL.
-2.  **Initialize (`POST`):** The client sends an `initialize` request to the session URL.
-3.  **Confirm (`POST`):** After receiving a successful result, the client sends a final `notifications/initialized` notification to confirm the handshake.
-
-Only after this sequence is complete can the session be used to execute commands like `tools/list` and `tools/call`.
-
-## Usage
-
-1.  Ensure all dependencies are installed and the poetry virtual environment is active.
-2.  Start the ArgoWatcherMCP server in one terminal. (It will require running argo-watcher instance)
+1.  Ensure all dependencies are installed and the Poetry virtual environment is active.
+2.  Start the ArgoWatcherMCP server in one terminal (this requires a running argo-watcher instance).
 3.  From the project root, run the test script in a second terminal:
 
     ```bash
     ./scripts/test.py
     ```
 
-The script will print its progress through each stage of the connection and handshake, then display the results of the tool calls. Any failure will be reported as a fatal error.
+The script will print its progress and the results of the tool calls.
 
-> By default, it will look for deployments of application "app".
+---
+
+## AI Chat Client (`ai-chat.py`)
+
+This is an interactive command-line application that allows you to have a stateful conversation with the Argo Watcher MCP server using a powerful Large Language Model (OpenAI's GPT-4o) for natural language understanding.
+
+### Purpose
+
+The AI chat client demonstrates a more advanced use case where natural language questions are used to query the server. The LLM understands the user's intent, determines which tool to use from the server, and formulates a final answer based on the data returned by the tool.
+
+### Technical Implementation
+
+The script is built using a modern, object-oriented approach for a clean and maintainable codebase:
+
+-   **`ArgoWatcherClient` Class:** Encapsulates all direct communication with the MCP server, including tool discovery and execution.
+-   **`ChatManager` Class:** Orchestrates the entire interactive session. It maintains the conversation history, sends requests to the LLM, and uses the `ArgoWatcherClient` to perform tool calls.
+-   **`click` and `rich`:** Used for creating a robust and user-friendly command-line interface with rich, formatted output (including Markdown).
+-   **Stateful Conversation:** The chat history is maintained across multiple turns, allowing for follow-up questions and context-aware interactions.
+
+### Usage
+
+1.  **Set Environment Variables:**
+    The script requires your OpenAI API key.
+    ```bash
+    export OPENAI_API_KEY="sk-..."
+    ```
+
+2.  **Start the ArgoWatcherMCP Server:**
+    Ensure the server is running, either locally or in Docker. See the main project `README.md` for instructions.
+
+3.  **Run the Chat Client:**
+    From the project root, run the script. It will enter an interactive loop.
+    ```bash
+    ./scripts/ai-chat.py
+    ```
+    You can also enable verbose debugging output with the `--debug` flag:
+    ```bash
+    ./scripts/ai-chat.py --debug
+    ```
+    Once running, you can type your questions at the prompt. Type `exit` or `quit` to end the session.

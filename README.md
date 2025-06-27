@@ -30,9 +30,52 @@ A simple service that exposes an [argo-watcher](https://github.com/shini4i/argo-
 
 ## Usage
 
-For now, there are no clear instructions for using this project.
+This section outlines the full process for setting up the environment and running the interactive AI chat client.
 
-For simple testing purposes, there is an example script `scripts/test.py`.
+1.  **Bootstrap `argo-watcher` Service**
+
+    The MCP server depends on a running `argo-watcher` instance. You can quickly bootstrap this service using the official `docker-compose.yml` from the [argo-watcher repository](https://github.com/shini4i/argo-watcher/blob/main/docker-compose.yml).
+
+    ```bash
+    # In a separate terminal, from the argo-watcher project directory:
+    docker-compose up
+    ```
+
+2.  **Start `argo-watcher-mcp` Server**
+
+    With `argo-watcher` running, start the MCP server. This project includes a convenience task for this purpose.
+
+    ```bash
+    # From this project's root directory:
+    task run
+    ```
+
+3.  **Configure OpenAI Credentials**
+
+    The AI chat client requires an OpenAI API key. Export it as an environment variable in the terminal where you plan to run the chat.
+
+    ```bash
+    export OPENAI_API_KEY="sk-..."
+    ```
+
+4.  **Launch the Interactive AI Chat**
+
+    Finally, run the AI chat client using its pre-configured task.
+
+    ```bash
+    # This will start the interactive chat session.
+    task chat
+    ```
+
+5.  **Ask Questions**
+
+    The script will enter an interactive loop. You can now ask questions about your deployments in natural language.
+
+<div align="center">
+
+<img src="https://raw.githubusercontent.com/shini4i/assets/main/src/argo-watcher-mcp/argo-watcher-mcp-chat.png" alt="Showcase" height="441" width="680">
+
+</div>
 
 ## Contributing
 
