@@ -73,7 +73,7 @@ This section outlines the full process for setting up the environment and runnin
 
 <div align="center">
 
-<img src="https://raw.githubusercontent.com/shini4i/assets/main/src/argo-watcher-mcp/argo-watcher-mcp-chat.png" alt="Showcase" height="441" width="680">
+<img src="https://raw.githubusercontent.com/shini4i/assets/main/src/argo-watcher-mcp/argo-watcher-mcp-chat.png" alt="Showcase" width="680" height="380">
 
 </div>
 
