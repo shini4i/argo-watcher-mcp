@@ -1,6 +1,6 @@
 [project]
 name = "argo-watcher-mcp"
-version = "0.1.0"
+version = "0.2.0"
 description = "A PoC MCP server for argo-watcher"
 authors = [
     {name = "Vadim Gedz",email = "github@shini4i.dev"}

@@ -11,7 +11,7 @@ from argo_watcher_mcp.dependencies import get_argo_client
 
 APP_TITLE = "ArgoWatcherMCP"
 APP_DESCRIPTION = "This server provides tools to query an argo-watcher instance."
-APP_VERSION = "0.1.0"
+APP_VERSION = "0.2.0"
 
 mcp = FastMCP(
     name=APP_TITLE,
