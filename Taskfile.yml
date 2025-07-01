@@ -10,12 +10,12 @@ tasks:
       - poetry.lock
 
   run:
-    desc: "Run the argo-watcher-mcp server."
+    desc: "Run the development server with Uvicorn."
     deps: [deps]
     env:
       ARGO_WATCHER_URL: http://localhost:8080
     cmds:
-      - poetry run mcp run --transport sse src/argo_watcher_mcp/main.py:mcp
+      - poetry run uvicorn argo_watcher_mcp.app:create_app --factory --host 0.0.0.0 --port 8000 --reload
 
   bump-patch:
     desc: "Bump the patch version"

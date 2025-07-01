@@ -31,7 +31,7 @@ def get_deployments(
     a specified time range.
 
     Args:
-        app: The name of the application to filter by.
+        app: The name of the application to filter by. (optional)
         days_history: How many days of history to search. Defaults to 30.
             This is ignored if 'from_timestamp' is provided.
         from_timestamp: The start of the time range (Unix timestamp).
