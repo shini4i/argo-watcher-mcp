@@ -17,6 +17,11 @@ tasks:
     cmds:
       - poetry run uvicorn argo_watcher_mcp.app:create_app --factory --host 0.0.0.0 --port 8000 --reload
 
+  test:
+    desc: "Run tests"
+    cmds:
+      - poetry run pytest
+
   bump-patch:
     desc: "Bump the patch version"
     cmds:

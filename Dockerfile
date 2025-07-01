@@ -35,4 +35,4 @@ USER app
 
 EXPOSE 8000
 
-CMD ["gunicorn", "--bind", "0.0.0.0:8000", "-w", "4", "-k", "uvicorn.workers.UvicornWorker", "argo_watcher_mcp.app:create_app"]
+CMD ["uvicorn", "argo_watcher_mcp.app:create_app", "--factory", "--host", "0.0.0.0", "--port", "8000"]
