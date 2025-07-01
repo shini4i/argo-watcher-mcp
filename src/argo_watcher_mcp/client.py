@@ -35,6 +35,14 @@ class ArgoWatcherClient:
         self._base_url = base_url
         self._client = client
 
+    def check_health(self) -> None:
+        """
+        Checks the health of the argo-watcher service by hitting its /healthz endpoint.
+        Raises httpx.HTTPStatusError on a non-2xx response.
+        """
+        response = self._client.get(f"{self._base_url}/healthz")
+        response.raise_for_status()
+
     def get_tasks(
         self,
         from_timestamp: int,

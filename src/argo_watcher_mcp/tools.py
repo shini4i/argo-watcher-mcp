@@ -1,11 +1,13 @@
-from datetime import datetime, timedelta, timezone
-from typing import List, Optional
+from datetime import datetime
+from datetime import timedelta
+from datetime import timezone
+from typing import List
+from typing import Optional
 
 from mcp.server.fastmcp import FastMCP
 
 from argo_watcher_mcp.client import Task
 from argo_watcher_mcp.dependencies import get_argo_client
-
 
 APP_TITLE = "ArgoWatcherMCP"
 APP_DESCRIPTION = "This server provides tools to query an argo-watcher instance."
@@ -20,10 +22,10 @@ mcp = FastMCP(
 
 @mcp.tool()
 def get_deployments(
-        app: Optional[str] = None,
-        days_history: int = 30,
-        from_timestamp: Optional[int] = None,
-        to_timestamp: Optional[int] = None,
+    app: Optional[str] = None,
+    days_history: int = 30,
+    from_timestamp: Optional[int] = None,
+    to_timestamp: Optional[int] = None,
 ) -> List[Task]:
     """Retrieves deployment tasks from argo-watcher.
 

@@ -1,12 +1,9 @@
-# argo_watcher_mcp/app.py
-
 import os
 from contextlib import asynccontextmanager
 
 import httpx
 from fastapi import FastAPI
 
-# Import the shared state and routers
 from argo_watcher_mcp.dependencies import app_state
 from argo_watcher_mcp.health import router as health_router
 from argo_watcher_mcp.tools import mcp
@@ -51,4 +48,3 @@ def create_app() -> FastAPI:
     app.mount("/", mcp.sse_app())
 
     return app
-
