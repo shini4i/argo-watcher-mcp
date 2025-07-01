@@ -1,3 +1,4 @@
+from datetime import datetime
 from typing import List
 from typing import Optional
 
@@ -21,8 +22,8 @@ class Task(BaseModel):
     project: str
     images: List[Image]
     status: str
-    created: float
-    updated: float
+    created: datetime
+    updated: datetime
     status_reason: Optional[str] = None
     validated: bool = False
     timeout: Optional[int] = None
