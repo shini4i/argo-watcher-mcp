@@ -4,7 +4,8 @@ ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
     PIP_NO_CACHE_DIR=1
 
-RUN pip install --no-cache-dir poetry==1.8.2
+RUN pip install --no-cache-dir poetry==2.1.2 && \
+    poetry self add poetry-plugin-export
 WORKDIR /app
 
 COPY pyproject.toml poetry.lock ./
@@ -13,7 +14,6 @@ RUN poetry export -f requirements.txt --output requirements.txt --without-hashes
     pip install --no-cache-dir -r requirements.txt
 
 COPY src ./src
-COPY server.py .
 
 RUN pip install --no-cache-dir .
 
@@ -29,8 +29,9 @@ RUN adduser --system --group --home ${APP_HOME} app
 WORKDIR ${APP_HOME}
 
 COPY --from=builder --chown=app:app /usr/local/lib/python3.13/site-packages /usr/local/lib/python3.13/site-packages
-COPY --from=builder --chown=app:app /app/server.py .
+COPY --from=builder --chown=app:app /usr/local/bin /usr/local/bin
 
+# Switch to the non-root user.
 USER app
 
 EXPOSE 8000
