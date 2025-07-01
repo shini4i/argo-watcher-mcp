@@ -31,7 +31,6 @@ WORKDIR ${APP_HOME}
 COPY --from=builder --chown=app:app /usr/local/lib/python3.13/site-packages /usr/local/lib/python3.13/site-packages
 COPY --from=builder --chown=app:app /usr/local/bin /usr/local/bin
 
-# Switch to the non-root user.
 USER app
 
 EXPOSE 8000

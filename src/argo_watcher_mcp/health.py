@@ -18,7 +18,7 @@ class HealthStatus(BaseModel):
 router = APIRouter()
 
 
-@router.get("/live", response_model=HealthStatus)
+@router.get("/healthz", response_model=HealthStatus)
 def liveness_check() -> HealthStatus:
     """
     Checks if the application is running.
@@ -26,7 +26,7 @@ def liveness_check() -> HealthStatus:
     return HealthStatus(status="up")
 
 
-@router.get("/ready", response_model=HealthStatus)
+@router.get("/readyz", response_model=HealthStatus)
 def readiness_check(argo_client: Annotated[ArgoWatcherClient, Depends(get_argo_client)]):
     """
     Checks if the application is ready to serve traffic by checking connectivity

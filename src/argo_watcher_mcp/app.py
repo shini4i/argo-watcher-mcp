@@ -41,10 +41,8 @@ def create_app() -> FastAPI:
         lifespan=lifespan,
     )
 
-    # Include the healthcheck routes
-    app.include_router(health_router, prefix="/health", tags=["Health"])
+    app.include_router(health_router, tags=["Health"])
 
-    # Mount the correct, complete MCP application
     app.mount("/", mcp.sse_app())
 
     return app
