@@ -23,7 +23,8 @@ mcp = FastMCP(
 
 def _parse_time_delta(time_delta_str: str) -> timedelta:
     """Parses a time delta string like '10m', '2h', or '7d'."""
-    match = re.match(r"(\d+)([mhd])", time_delta_str.lower())
+    # FIX: Add anchors (^) and ($) for exact matching.
+    match = re.match(r"^(\d+)([mhd])$", time_delta_str.lower())
     if not match:
         raise ValueError("Invalid time delta format. Use '10m', '2h', or '7d'.")
     value, unit = match.groups()
@@ -58,22 +59,33 @@ def get_deployments(
     # Prioritize absolute datetime strings
     if from_datetime:
         try:
-            start_dt = datetime.fromisoformat(from_datetime).replace(tzinfo=timezone.utc)
+            # FIX: Properly handle timezone-aware and naive datetime strings.
+            start_dt = datetime.fromisoformat(from_datetime)
+            if start_dt.tzinfo is None:
+                start_dt = start_dt.replace(tzinfo=timezone.utc)
+            else:
+                start_dt = start_dt.astimezone(timezone.utc)
             from_timestamp = int(start_dt.timestamp())
-            # If a to_datetime is also provided, use it. Otherwise, default to now.
+
             if to_datetime:
-                end_dt = datetime.fromisoformat(to_datetime).replace(tzinfo=timezone.utc)
+                end_dt = datetime.fromisoformat(to_datetime)
+                if end_dt.tzinfo is None:
+                    end_dt = end_dt.replace(tzinfo=timezone.utc)
+                else:
+                    end_dt = end_dt.astimezone(timezone.utc)
                 to_timestamp = int(end_dt.timestamp())
 
         except ValueError:
-            return ["Error: Invalid datetime format. Please use YYYY-MM-DDTHH:MM:SS."]  # type: ignore
+            # FIX: Raise an exception instead of returning a string in the list.
+            raise ValueError("Invalid datetime format. Please use YYYY-MM-DDTHH:MM:SS.")
     # Fall back to time_delta
     elif time_delta:
         try:
             delta = _parse_time_delta(time_delta)
             from_timestamp = int((now - delta).timestamp())
         except ValueError as e:
-            return [f"Error: {e}"]  # type: ignore
+            # FIX: Raise the exception instead of returning a string.
+            raise e
     # Default to 1 day
     else:
         delta = timedelta(days=1)
