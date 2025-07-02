@@ -8,25 +8,29 @@ import asyncio
 import json
 import logging
 import os
-from datetime import datetime, timezone
-from typing import Any, Dict, List
+from datetime import datetime
+from datetime import timezone
+from pathlib import Path
+from typing import Any
+from typing import Dict
+from typing import List
 from urllib.parse import urlencode
 
 import click
 from icecream import ic
 from mcp.client.session import ClientSession
 from mcp.client.sse import sse_client
-from openai import AsyncOpenAI, OpenAIError
-from openai.types.chat import (
-    ChatCompletionMessage,
-    ChatCompletionMessageParam,
-    ChatCompletionToolParam,
-)
+from openai import AsyncOpenAI
+from openai import OpenAIError
+from openai.types.chat import ChatCompletionMessage
+from openai.types.chat import ChatCompletionMessageParam
+from openai.types.chat import ChatCompletionToolParam
 from rich.console import Console
 from rich.markdown import Markdown
 
 BASE_URL = os.getenv("MCP_SERVER_URL", "http://localhost:8000")
 SSE_INIT_PATH = "/sse"
+INSTRUCTION_FILE = Path("./scripts/instructions/process_deployments.md")
 
 
 class ArgoWatcherClient:
@@ -37,13 +41,11 @@ class ArgoWatcherClient:
         self.sse_path = sse_path
 
     def _get_init_url(self) -> str:
-        """Constructs the initial URL required to start an MCP session."""
         init_command = {"mcp_version": "1.0", "method": "mcp.discovery.list_tools"}
         query_params = urlencode({"p": json.dumps(init_command)})
         return f"{self.base_url.rstrip('/')}/{self.sse_path.lstrip('/')}?{query_params}"
 
     async def discover_tools(self) -> List[ChatCompletionToolParam]:
-        """Connects to the MCP server to discover the available tools."""
         init_url = self._get_init_url()
         openai_tools: List[ChatCompletionToolParam] = []
         try:
@@ -54,7 +56,7 @@ class ArgoWatcherClient:
                     mcp_tools_response = await session.list_tools()
                     if hasattr(mcp_tools_response, "tools"):
                         for tool in mcp_tools_response.tools:
-                            openai_tools.append(  # type: ignore
+                            openai_tools.append(
                                 {
                                     "type": "function",
                                     "function": {
@@ -62,14 +64,13 @@ class ArgoWatcherClient:
                                         "description": tool.description,
                                         "parameters": tool.inputSchema,
                                     },
-                                }
+                                }  # type: ignore
                             )
             return openai_tools
         except Exception as e:
             raise click.ClickException(f"Error discovering tools: {e}")
 
     async def execute_tool(self, tool_name: str, tool_args: Dict[str, Any]) -> str:
-        """Establishes a new connection to execute a single tool call."""
         ic(f"🤖 Calling tool {tool_name} with arguments:", tool_args)
         init_url = self._get_init_url()
         try:
@@ -94,14 +95,16 @@ class ChatManager:
     """Manages the interactive chat session, conversation history, and LLM interaction."""
 
     def __init__(
-            self,
-            mcp_client: ArgoWatcherClient,
-            llm_client: AsyncOpenAI,
-            console: Console,
+        self,
+        mcp_client: ArgoWatcherClient,
+        llm_client: AsyncOpenAI,
+        console: Console,
+        base_instructions: str,
     ):
         self.mcp_client = mcp_client
         self.llm_client = llm_client
         self.console = console
+        self.base_instructions = base_instructions
         self.messages: List[ChatCompletionMessageParam] = []
         self.tools: List[ChatCompletionToolParam] = []
 
@@ -116,18 +119,23 @@ class ChatManager:
     def _add_message_to_history(self, message: ChatCompletionMessage):
         """Type-safe method to add a message object to the conversation history."""
         new_message: Dict[str, Any] = {"role": message.role}
-
         if message.content:
             new_message["content"] = message.content
-
         if message.tool_calls:
             new_message["tool_calls"] = [tool_call.model_dump() for tool_call in message.tool_calls]
-
         self.messages.append(new_message)  # type: ignore
 
-    async def handle_tool_calls(
-            self, response_message: ChatCompletionMessage, system_message: Dict[str, Any]
-    ):
+    def _get_system_message(self) -> Dict[str, Any]:
+        """Constructs the full system message with base instructions and current time."""
+        current_time_iso = datetime.now(timezone.utc).isoformat()
+        content = (
+            f"{self.base_instructions}\n\n"
+            f"---CONTEXT---\n"
+            f"The current UTC date and time is {current_time_iso}."
+        )
+        return {"role": "system", "content": content}
+
+    async def handle_tool_calls(self, response_message: ChatCompletionMessage):
         """Processes tool calls requested by the LLM."""
         ic("🧠 LLM decided to call a tool...")
         if not response_message.tool_calls:
@@ -139,41 +147,38 @@ class ChatManager:
                 function_args = json.loads(tool_call.function.arguments)
             except json.JSONDecodeError:
                 error_message = (
-                    f"[bold red]Error: LLM returned malformed JSON for tool "
-                    f"'{function_name}' arguments.[/bold red]"
+                    f"[bold red]Error: LLM returned malformed JSON for tool '{function_name}' "
+                    f"arguments.[/bold red]"
                 )
                 self.console.print(error_message)
                 self.messages.append(
-                    {  # type: ignore
+                    {
                         "tool_call_id": tool_call.id,
                         "role": "tool",
                         "name": function_name,
                         "content": json.dumps({"error": "Malformed JSON arguments from LLM."}),
-                    }
+                    }  # type: ignore
                 )
                 continue
 
             ic("LLM wants to call:", function_name, function_args)
-
             function_response_str = await self.mcp_client.execute_tool(
                 tool_name=function_name,
                 tool_args=function_args,
             )
-
             ic("Raw response from tool:", function_response_str)
-
-            self.messages.append(  # type: ignore
+            self.messages.append(
                 {
                     "tool_call_id": tool_call.id,
                     "role": "tool",
                     "name": function_name,
                     "content": function_response_str,
-                }
+                }  # type: ignore
             )
 
-        messages_to_send = [system_message] + self.messages
+        messages_to_send = [self._get_system_message()] + self.messages
         with self.console.status(
-                "[bold blue]Summarizing tool results...[/bold blue]", spinner="dots"
+            "[bold blue]Summarizing tool results...[/bold blue]", spinner="dots"
         ):
             second_response = await self.llm_client.chat.completions.create(
                 model="gpt-4o",
@@ -201,21 +206,12 @@ class ChatManager:
 
             try:
                 self.messages.append(user_message)  # type: ignore
-
-                current_time_iso = datetime.now(timezone.utc).isoformat()
-                system_message = {
-                    "role": "system",
-                    "content": (
-                        f"You are a helpful assistant. The current date and time is {current_time_iso}. The time is in the UTC timezone."
-                        "Use this as your reference for any time-related questions."
-                    ),
-                }
-                messages_to_send = [system_message] + self.messages
+                messages_to_send = [self._get_system_message()] + self.messages
 
                 with self.console.status("[bold blue]Thinking...[/bold blue]", spinner="dots"):
                     response = await self.llm_client.chat.completions.create(
-                        model="o3",
-                        messages=messages_to_send, # Use the list with the system message
+                        model="gpt-4o",
+                        messages=messages_to_send,
                         tools=self.tools,
                         tool_choice="auto",
                     )
@@ -223,7 +219,7 @@ class ChatManager:
                     self._add_message_to_history(response_message)
 
                 if response_message.tool_calls:
-                    final_answer = await self.handle_tool_calls(response_message, system_message)
+                    final_answer = await self.handle_tool_calls(response_message)
                 else:
                     final_answer = response_message.content
 
@@ -250,8 +246,8 @@ class ChatManager:
 
 @click.command()
 @click.option("--debug", is_flag=True, help="Enable debug output with icecream.")
-def cli(debug):
-    """An interactive CLI to chat with the Argo Watcher MCP server via an LLM."""
+def cli(debug: bool):
+    """An interactive CLI that uses a set of base instructions to guide the LLM."""
     if not debug:
         ic.disable()
 
@@ -260,11 +256,17 @@ def cli(debug):
     if not os.getenv("OPENAI_API_KEY"):
         raise click.ClickException("The OPENAI_API_KEY environment variable is not set.")
 
+    if not INSTRUCTION_FILE.is_file():
+        raise click.ClickException(f"Instruction file not found at: {INSTRUCTION_FILE.resolve()}")
+
     try:
+        with open(INSTRUCTION_FILE, "r") as f:
+            base_instructions = f.read()
+
         llm_client = AsyncOpenAI()
         console = Console()
         mcp_client = ArgoWatcherClient(base_url=BASE_URL, sse_path=SSE_INIT_PATH)
-        chat_manager = ChatManager(mcp_client, llm_client, console)
+        chat_manager = ChatManager(mcp_client, llm_client, console, base_instructions)
 
         asyncio.run(chat_manager.start_chat())
 

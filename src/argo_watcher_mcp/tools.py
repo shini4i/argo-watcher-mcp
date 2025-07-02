@@ -1,3 +1,4 @@
+import re
 from datetime import datetime
 from datetime import timedelta
 from datetime import timezone
@@ -20,38 +21,63 @@ mcp = FastMCP(
 )
 
 
+def _parse_time_delta(time_delta_str: str) -> timedelta:
+    """Parses a time delta string like '10m', '2h', or '7d'."""
+    match = re.match(r"(\d+)([mhd])", time_delta_str.lower())
+    if not match:
+        raise ValueError("Invalid time delta format. Use '10m', '2h', or '7d'.")
+    value, unit = match.groups()
+    if unit == "m":
+        return timedelta(minutes=int(value))
+    if unit == "h":
+        return timedelta(hours=int(value))
+    return timedelta(days=int(value))
+
+
 @mcp.tool()
 def get_deployments(
     app: Optional[str] = None,
-    days_history: int = 30,
-    from_timestamp: Optional[int] = None,
-    to_timestamp: Optional[int] = None,
+    time_delta: Optional[str] = None,
+    from_datetime: Optional[str] = None,  # Expects "YYYY-MM-DDTHH:MM:SS"
+    to_datetime: Optional[str] = None,  # Expects "YYYY-MM-DDTHH:MM:SS"
 ) -> List[Task]:
-    """Retrieves deployment tasks from argo-watcher.
-
-    This tool allows filtering for deployment tasks by application name and
-    a specified time range.
+    """
+    Retrieves deployments. Supports relative time OR absolute datetime strings.
+    Absolute datetimes take precedence.
 
     Args:
-        app: The name of the application to filter by. (optional)
-        days_history: How many days of history to search. Defaults to 30.
-            This is ignored if 'from_timestamp' is provided.
-        from_timestamp: The start of the time range (Unix timestamp).
-            If provided, it overrides 'days_history'.
-        to_timestamp: The end of the time range (Unix timestamp).
-            Defaults to the current time.
-
-    Returns:
-        A list of Task objects representing the deployments.
+        app: The application name to filter by.
+        time_delta: A relative time like '10m', '2h', or '7d'.
+        from_datetime: An absolute start time in ISO format ("YYYY-MM-DDTHH:MM:SS").
+        to_datetime: An absolute end time in ISO format ("YYYY-MM-DDTHH:MM:SS").
     """
     argo_client = get_argo_client()
+    now = datetime.now(timezone.utc)
+    to_timestamp = int(now.timestamp())
 
-    if to_timestamp is None:
-        to_timestamp = int(datetime.now(timezone.utc).timestamp())
+    # Prioritize absolute datetime strings
+    if from_datetime:
+        try:
+            start_dt = datetime.fromisoformat(from_datetime).replace(tzinfo=timezone.utc)
+            from_timestamp = int(start_dt.timestamp())
+            # If a to_datetime is also provided, use it. Otherwise, default to now.
+            if to_datetime:
+                end_dt = datetime.fromisoformat(to_datetime).replace(tzinfo=timezone.utc)
+                to_timestamp = int(end_dt.timestamp())
 
-    if from_timestamp is None:
-        now = datetime.fromtimestamp(to_timestamp, tz=timezone.utc)
-        from_timestamp = int((now - timedelta(days=days_history)).timestamp())
+        except ValueError:
+            return ["Error: Invalid datetime format. Please use YYYY-MM-DDTHH:MM:SS."]  # type: ignore
+    # Fall back to time_delta
+    elif time_delta:
+        try:
+            delta = _parse_time_delta(time_delta)
+            from_timestamp = int((now - delta).timestamp())
+        except ValueError as e:
+            return [f"Error: {e}"]  # type: ignore
+    # Default to 1 day
+    else:
+        delta = timedelta(days=1)
+        from_timestamp = int((now - delta).timestamp())
 
     return argo_client.get_tasks(
         from_timestamp=from_timestamp,
