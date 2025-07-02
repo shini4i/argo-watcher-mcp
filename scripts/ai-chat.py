@@ -8,24 +8,23 @@ import asyncio
 import json
 import logging
 import os
-from typing import Any
-from typing import Dict
-from typing import List
+from datetime import datetime, timezone
+from typing import Any, Dict, List
 from urllib.parse import urlencode
 
 import click
 from icecream import ic
 from mcp.client.session import ClientSession
 from mcp.client.sse import sse_client
-from openai import AsyncOpenAI
-from openai import OpenAIError
-from openai.types.chat import ChatCompletionMessage
-from openai.types.chat import ChatCompletionMessageParam
-from openai.types.chat import ChatCompletionToolParam
+from openai import AsyncOpenAI, OpenAIError
+from openai.types.chat import (
+    ChatCompletionMessage,
+    ChatCompletionMessageParam,
+    ChatCompletionToolParam,
+)
 from rich.console import Console
 from rich.markdown import Markdown
 
-# --- Configuration ---
 BASE_URL = os.getenv("MCP_SERVER_URL", "http://localhost:8000")
 SSE_INIT_PATH = "/sse"
 
@@ -95,10 +94,10 @@ class ChatManager:
     """Manages the interactive chat session, conversation history, and LLM interaction."""
 
     def __init__(
-        self,
-        mcp_client: ArgoWatcherClient,
-        llm_client: AsyncOpenAI,
-        console: Console,
+            self,
+            mcp_client: ArgoWatcherClient,
+            llm_client: AsyncOpenAI,
+            console: Console,
     ):
         self.mcp_client = mcp_client
         self.llm_client = llm_client
@@ -126,7 +125,9 @@ class ChatManager:
 
         self.messages.append(new_message)  # type: ignore
 
-    async def handle_tool_calls(self, response_message: ChatCompletionMessage):
+    async def handle_tool_calls(
+            self, response_message: ChatCompletionMessage, system_message: Dict[str, Any]
+    ):
         """Processes tool calls requested by the LLM."""
         ic("🧠 LLM decided to call a tool...")
         if not response_message.tool_calls:
@@ -142,7 +143,6 @@ class ChatManager:
                     f"'{function_name}' arguments.[/bold red]"
                 )
                 self.console.print(error_message)
-                # Add an error message to the history for this specific tool call
                 self.messages.append(
                     {  # type: ignore
                         "tool_call_id": tool_call.id,
@@ -151,7 +151,7 @@ class ChatManager:
                         "content": json.dumps({"error": "Malformed JSON arguments from LLM."}),
                     }
                 )
-                continue  # Skip this tool call and proceed to the next, if any
+                continue
 
             ic("LLM wants to call:", function_name, function_args)
 
@@ -171,12 +171,13 @@ class ChatManager:
                 }
             )
 
+        messages_to_send = [system_message] + self.messages
         with self.console.status(
-            "[bold blue]Summarizing tool results...[/bold blue]", spinner="dots"
+                "[bold blue]Summarizing tool results...[/bold blue]", spinner="dots"
         ):
             second_response = await self.llm_client.chat.completions.create(
                 model="gpt-4o",
-                messages=self.messages,
+                messages=messages_to_send,
             )
         final_response_message = second_response.choices[0].message
         self._add_message_to_history(final_response_message)
@@ -199,13 +200,22 @@ class ChatManager:
             user_message = {"role": "user", "content": prompt}
 
             try:
-                # Add user message to history before making the API call.
                 self.messages.append(user_message)  # type: ignore
+
+                current_time_iso = datetime.now(timezone.utc).isoformat()
+                system_message = {
+                    "role": "system",
+                    "content": (
+                        f"You are a helpful assistant. The current date and time is {current_time_iso}. The time is in the UTC timezone."
+                        "Use this as your reference for any time-related questions."
+                    ),
+                }
+                messages_to_send = [system_message] + self.messages
 
                 with self.console.status("[bold blue]Thinking...[/bold blue]", spinner="dots"):
                     response = await self.llm_client.chat.completions.create(
-                        model="gpt-4o",
-                        messages=self.messages,
+                        model="o3",
+                        messages=messages_to_send, # Use the list with the system message
                         tools=self.tools,
                         tool_choice="auto",
                     )
@@ -213,7 +223,7 @@ class ChatManager:
                     self._add_message_to_history(response_message)
 
                 if response_message.tool_calls:
-                    final_answer = await self.handle_tool_calls(response_message)
+                    final_answer = await self.handle_tool_calls(response_message, system_message)
                 else:
                     final_answer = response_message.content
 
@@ -227,7 +237,6 @@ class ChatManager:
                 self.console.print("\n[bold]Goodbye![/bold]")
                 break
             except Exception as e:
-                # On any error, remove the last user message to keep history consistent.
                 if self.messages and self.messages[-1] == user_message:
                     self.messages.pop()
 
@@ -246,7 +255,6 @@ def cli(debug):
     if not debug:
         ic.disable()
 
-    # Set the log level for httpx to WARNING to hide INFO messages.
     logging.getLogger("httpx").setLevel(logging.WARNING)
 
     if not os.getenv("OPENAI_API_KEY"):
@@ -261,7 +269,6 @@ def cli(debug):
         asyncio.run(chat_manager.start_chat())
 
     except Exception as e:
-        # Let click handle all exceptions for consistent output.
         raise click.ClickException(f"Failed to start the application: {e}")
 
 
