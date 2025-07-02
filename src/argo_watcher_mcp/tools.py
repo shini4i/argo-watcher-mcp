@@ -23,7 +23,6 @@ mcp = FastMCP(
 
 def _parse_time_delta(time_delta_str: str) -> timedelta:
     """Parses a time delta string like '10m', '2h', or '7d'."""
-    # FIX: Add anchors (^) and ($) for exact matching.
     match = re.match(r"^(\d+)([mhd])$", time_delta_str.lower())
     if not match:
         raise ValueError("Invalid time delta format. Use '10m', '2h', or '7d'.")
