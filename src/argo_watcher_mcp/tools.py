@@ -56,10 +56,8 @@ def get_deployments(
     now = datetime.now(timezone.utc)
     to_timestamp = int(now.timestamp())
 
-    # Prioritize absolute datetime strings
     if from_datetime:
         try:
-            # FIX: Properly handle timezone-aware and naive datetime strings.
             start_dt = datetime.fromisoformat(from_datetime)
             if start_dt.tzinfo is None:
                 start_dt = start_dt.replace(tzinfo=timezone.utc)
@@ -76,17 +74,13 @@ def get_deployments(
                 to_timestamp = int(end_dt.timestamp())
 
         except ValueError:
-            # FIX: Raise an exception instead of returning a string in the list.
             raise ValueError("Invalid datetime format. Please use YYYY-MM-DDTHH:MM:SS.")
-    # Fall back to time_delta
     elif time_delta:
         try:
             delta = _parse_time_delta(time_delta)
             from_timestamp = int((now - delta).timestamp())
         except ValueError as e:
-            # FIX: Raise the exception instead of returning a string.
             raise e
-    # Default to 1 day
     else:
         delta = timedelta(days=1)
         from_timestamp = int((now - delta).timestamp())
