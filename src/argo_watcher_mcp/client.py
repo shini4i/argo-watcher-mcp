@@ -30,25 +30,28 @@ class Task(BaseModel):
 
 
 class ArgoWatcherClient:
-    """A client for the argo-watcher API."""
+    """An ASYNCHRONOUS client for the argo-watcher API."""
 
-    def __init__(self, base_url: str, client: httpx.Client):
+    def __init__(self, base_url: str, client: httpx.AsyncClient):
+        """
+        The client must be an httpx.AsyncClient.
+        """
         self._base_url = base_url
         self._client = client
 
-    def check_health(self) -> None:
+    async def check_health(self) -> None:
         """
         Checks the health of the argo-watcher service by hitting its /healthz endpoint.
         Raises httpx.HTTPStatusError on a non-2xx response.
         """
-        response = self._client.get(f"{self._base_url}/healthz")
+        response = await self._client.get(f"{self._base_url}/healthz")
         response.raise_for_status()
 
-    def get_tasks(
-        self,
-        from_timestamp: int,
-        to_timestamp: Optional[int] = None,
-        app: Optional[str] = None,
+    async def get_tasks(
+            self,
+            from_timestamp: int,
+            to_timestamp: Optional[int] = None,
+            app: Optional[str] = None,
     ) -> List[Task]:
         """
         Fetches tasks from the argo-watcher /api/v1/tasks endpoint.
@@ -61,7 +64,7 @@ class ArgoWatcherClient:
 
         request_params = {k: v for k, v in params.items() if v is not None}
 
-        response = self._client.get(f"{self._base_url}/api/v1/tasks", params=request_params)
+        response = await self._client.get(f"{self._base_url}/api/v1/tasks", params=request_params)
         response.raise_for_status()
 
         response_data = response.json()

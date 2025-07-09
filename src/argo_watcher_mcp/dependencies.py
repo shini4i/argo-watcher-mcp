@@ -4,7 +4,8 @@ from argo_watcher_mcp.client import ArgoWatcherClient
 
 
 class AppState:
-    http_client: httpx.Client | None = None
+    """Holds the shared state of the application."""
+    http_client: httpx.AsyncClient | None = None
     argo_watcher_url: str | None = None
 
 
@@ -18,8 +19,8 @@ def get_argo_client() -> ArgoWatcherClient:
     This function relies on the `app_state` object being populated
     by the application's lifespan manager.
     """
-    if not isinstance(app_state.http_client, httpx.Client) or not app_state.argo_watcher_url:
-        raise RuntimeError("Application state not initialized. Lifespan manager did not run.")
+    if not isinstance(app_state.http_client, httpx.AsyncClient) or not app_state.argo_watcher_url:
+        raise RuntimeError("Application state not initialized or is incorrect. Lifespan manager did not run correctly.")
 
     return ArgoWatcherClient(
         base_url=app_state.argo_watcher_url,

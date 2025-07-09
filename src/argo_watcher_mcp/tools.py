@@ -35,7 +35,7 @@ def _parse_time_delta(time_delta_str: str) -> timedelta:
 
 
 @mcp.tool()
-def get_deployments(
+async def get_deployments(
     app: Optional[str] = None,
     time_delta: Optional[str] = None,
     from_datetime: Optional[str] = None,  # Expects "YYYY-MM-DDTHH:MM:SS"
@@ -84,7 +84,7 @@ def get_deployments(
         delta = timedelta(days=1)
         from_timestamp = int((now - delta).timestamp())
 
-    return argo_client.get_tasks(
+    return await argo_client.get_tasks(
         from_timestamp=from_timestamp,
         to_timestamp=to_timestamp,
         app=app,

@@ -27,13 +27,13 @@ def liveness_check() -> HealthStatus:
 
 
 @router.get("/readyz", response_model=HealthStatus)
-def readiness_check(argo_client: Annotated[ArgoWatcherClient, Depends(get_argo_client)]):
+async def readiness_check(argo_client: Annotated[ArgoWatcherClient, Depends(get_argo_client)]):
     """
     Checks if the application is ready to serve traffic by checking connectivity
     to the downstream argo-watcher service.
     """
     try:
-        argo_client.check_health()
+        await argo_client.check_health()
     except httpx.RequestError as e:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
