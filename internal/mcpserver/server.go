@@ -77,10 +77,20 @@ func (s *Server) StreamableHandler() http.Handler {
 }
 
 type getDeploymentsInput struct {
-	App         *string `json:"app,omitempty"`
-	DaysHistory *int    `json:"days_history,omitempty"`
-	FromUnix    *int64  `json:"from_timestamp,omitempty"`
-	ToUnix      *int64  `json:"to_timestamp,omitempty"`
+	// The name of the application to filter by. Optional.
+	App *string `json:"app,omitempty"`
+
+	// How many days of history to search. Defaults to 30 when no explicit start is provided.
+	// Ignored if `from_timestamp` is supplied. Must be non-negative.
+	DaysHistory *int `json:"days_history,omitempty"`
+
+	// The start of the time range (Unix timestamp).
+	// If provided, overrides `days_history`.
+	FromUnix *int64 `json:"from_timestamp,omitempty"`
+
+	// The end of the time range (Unix timestamp).
+	// Defaults to the current time.
+	ToUnix *int64 `json:"to_timestamp,omitempty"`
 }
 
 type getDeploymentsHandler struct {
