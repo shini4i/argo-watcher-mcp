@@ -28,5 +28,16 @@ jobs:
           go-version: "1.25"
           cache: true
 
-      - name: Run unit tests
-        run: go test ./...
+      - name: Run unit tests with coverage
+        run: go test -covermode=atomic -coverprofile=coverage.out ./...
+
+      - name: Show coverage summary
+        run: go tool cover -func=coverage.out
+
+      - name: Upload coverage to Codecov
+        uses: codecov/codecov-action@d9f36a0ac14b9b22a2e2e790fdaa24244167d116 # v4.5.0
+        with:
+          files: coverage.out
+          token: ${{ secrets.CODECOV_TOKEN }}
+          flags: unit-tests
+          fail_ci_if_error: true

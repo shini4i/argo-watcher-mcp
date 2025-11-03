@@ -20,7 +20,7 @@ func TestCheckSuccess(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	client := New(srv.URL, srv.Client())
+	client := New(srv.URL, srv.Client(), nil)
 	if err := client.Check(context.Background()); err != nil {
 		t.Fatalf("expected no error, got %v", err)
 	}
@@ -32,7 +32,7 @@ func TestCheckFailure(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	client := New(srv.URL, srv.Client())
+	client := New(srv.URL, srv.Client(), nil)
 	if err := client.Check(context.Background()); err == nil {
 		t.Fatalf("expected error, got nil")
 	}
@@ -80,7 +80,7 @@ func TestListDeployments(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	client := New(srv.URL, srv.Client())
+	client := New(srv.URL, srv.Client(), nil)
 	app := "api"
 	deployments, err := client.ListDeployments(context.Background(), domain.DeploymentFilter{
 		App:           &app,

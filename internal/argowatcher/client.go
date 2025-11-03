@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"net/url"
 	"strings"
@@ -22,13 +23,18 @@ type HTTPClient interface {
 type Client struct {
 	baseURL string
 	client  HTTPClient
+	logger  *slog.Logger
 }
 
 // New creates a Client.
-func New(baseURL string, client HTTPClient) *Client {
+func New(baseURL string, client HTTPClient, logger *slog.Logger) *Client {
+	if logger == nil {
+		logger = slog.Default()
+	}
 	return &Client{
 		baseURL: strings.TrimRight(baseURL, "/"),
 		client:  client,
+		logger:  logger,
 	}
 }
 
@@ -85,7 +91,13 @@ func (c *Client) ListDeployments(ctx context.Context, filter domain.DeploymentFi
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		body, _ := io.ReadAll(io.LimitReader(resp.Body, 4<<10))
-		return nil, fmt.Errorf("fetch tasks: status %d body %q", resp.StatusCode, strings.TrimSpace(string(body)))
+		bodyStr := strings.TrimSpace(string(body))
+		c.logger.Warn("downstream API error",
+			slog.Int("status", resp.StatusCode),
+			slog.String("body", bodyStr),
+			slog.String("url", endpoint.String()),
+		)
+		return nil, fmt.Errorf("fetch tasks: status %d body %q", resp.StatusCode, bodyStr)
 	}
 
 	var payload struct {
@@ -93,6 +105,7 @@ func (c *Client) ListDeployments(ctx context.Context, filter domain.DeploymentFi
 	}
 
 	if err := json.NewDecoder(resp.Body).Decode(&payload); err != nil {
+		c.logger.Error("decode tasks response", slog.Any("error", err))
 		return nil, fmt.Errorf("decode tasks response: %w", err)
 	}
 

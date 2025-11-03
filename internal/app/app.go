@@ -57,7 +57,7 @@ func (a *Application) Run(ctx context.Context) error {
 	}
 	defer httpClient.CloseIdleConnections()
 
-	argoClient := argowatcher.New(a.cfg.ArgoWatcherBaseURL, httpClient)
+	argoClient := argowatcher.New(a.cfg.ArgoWatcherBaseURL, httpClient, a.logger)
 
 	mcpSrv, err := mcpserver.New(mcpserver.Options{
 		Name:    a.cfg.Name,
@@ -74,7 +74,7 @@ func (a *Application) Run(ctx context.Context) error {
 		handler = mcpSrv.StreamableHandler()
 	}
 
-	router := httpserver.NewRouter(argoClient, handler, a.cfg.EnableHTTPTransport)
+	router := httpserver.NewRouter(a.logger, argoClient, handler, a.cfg.EnableHTTPTransport)
 
 	httpSrv := &http.Server{
 		Addr:    a.cfg.HTTPListenAddr,

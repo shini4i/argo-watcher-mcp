@@ -19,7 +19,7 @@ func (s *stubChecker) Check(_ context.Context) error {
 }
 
 func TestHealthEndpoints(t *testing.T) {
-	router := NewRouter(&stubChecker{}, nil, false)
+	router := NewRouter(nil, &stubChecker{}, nil, false)
 	server := httptest.NewServer(router)
 	defer server.Close()
 
@@ -40,7 +40,7 @@ func TestHealthEndpoints(t *testing.T) {
 }
 
 func TestReadinessFailures(t *testing.T) {
-	router := NewRouter(&stubChecker{err: errors.New("downstream failed")}, nil, false)
+	router := NewRouter(nil, &stubChecker{err: errors.New("downstream failed")}, nil, false)
 	server := httptest.NewServer(router)
 	defer server.Close()
 
@@ -60,7 +60,7 @@ func TestRouterWithMCPHandler(t *testing.T) {
 		w.WriteHeader(http.StatusAccepted)
 	})
 
-	router := NewRouter(&stubChecker{}, handler, true)
+	router := NewRouter(nil, &stubChecker{}, handler, true)
 	server := httptest.NewServer(router)
 	defer server.Close()
 
@@ -82,7 +82,7 @@ func TestRouterWithMCPHandlerDisabled(t *testing.T) {
 		w.WriteHeader(http.StatusAccepted)
 	})
 
-	router := NewRouter(&stubChecker{}, handler, false)
+	router := NewRouter(nil, &stubChecker{}, handler, false)
 	server := httptest.NewServer(router)
 	defer server.Close()
 
@@ -101,7 +101,7 @@ func TestRouterWithMCPHandlerDisabled(t *testing.T) {
 }
 
 func TestRouterWithoutMCPHandler(t *testing.T) {
-	router := NewRouter(&stubChecker{}, nil, false)
+	router := NewRouter(nil, &stubChecker{}, nil, false)
 	server := httptest.NewServer(router)
 	defer server.Close()
 
