@@ -13,17 +13,25 @@
           inherit system;
         };
       in
-      {
-        packages.argo-watcher-mcp = pkgs.buildGoModule {
+      let
+        goPackage = pkgs.buildGoModule {
           pname = "argo-watcher-mcp";
           version = "0.0.0-dev";
           src = ./.;
           vendorHash = pkgs.lib.fakeSha256;
+          CGO_ENABLED = 0;
+        };
+      in {
+        packages = {
+          argo-watcher-mcp = goPackage;
+          default = goPackage;
         };
 
         devShells.default = pkgs.mkShell {
           packages = with pkgs; [
             go_1_25
+            go-task
+            goreleaser
             golangci-lint
             gotestsum
             air
@@ -36,7 +44,7 @@
           };
 
           shellHook = ''
-            echo "Entering Go dev shell. Run 'go test ./...' or 'golangci-lint run'."
+            echo "Go dev shell ready. Try 'task test', 'task release:snapshot', or 'golangci-lint run'."
           '';
         };
       }

@@ -1,40 +1,60 @@
-version: '3'
+version: "3"
+
+vars:
+  GOMODCACHE: "{{.ROOT_DIR}}/.cache/gomod"
+  GOCACHE: "{{.ROOT_DIR}}/.cache/gocache"
+  OUTPUT_DIR: "{{.ROOT_DIR}}/bin"
+  BINARY: "argo-watcher-mcp"
 
 tasks:
-  deps:
-    desc: "Install project dependencies using Poetry."
+  setup:
+    desc: "Prepare Go build caches"
     cmds:
-      - poetry install --with dev,chat
-    sources:
-      - pyproject.toml
-      - poetry.lock
+      - mkdir -p {{.GOMODCACHE}} {{.GOCACHE}}
 
-  run:
-    desc: "Run the development server with Uvicorn."
-    deps: [deps]
-    env:
-      ARGO_WATCHER_URL: http://localhost:8080
+  tidy:
+    desc: "Tidy Go module dependencies"
+    deps: [setup]
     cmds:
-      - poetry run uvicorn argo_watcher_mcp.app:create_app --factory --host 0.0.0.0 --port 8000 --reload
+      - GOMODCACHE={{.GOMODCACHE}} GOCACHE={{.GOCACHE}} go mod tidy
+
+  fmt:
+    desc: "Format Go sources"
+    cmds:
+      - gofmt -w ./cmd ./internal
+
+  vet:
+    desc: "Run go vet"
+    deps: [setup]
+    cmds:
+      - GOMODCACHE={{.GOMODCACHE}} GOCACHE={{.GOCACHE}} go vet ./...
 
   test:
-    desc: "Run tests"
+    desc: "Run unit tests"
+    deps: [setup]
     cmds:
-      - poetry run pytest
+      - GOMODCACHE={{.GOMODCACHE}} GOCACHE={{.GOCACHE}} go test ./...
 
-  bump-patch:
-    desc: "Bump the patch version"
+  build:
+    desc: "Build the server binary"
+    deps: [setup]
     cmds:
-      - bump2version patch --allow-dirty
+      - mkdir -p {{.OUTPUT_DIR}}
+      - GOMODCACHE={{.GOMODCACHE}} GOCACHE={{.GOCACHE}} go build -o {{.OUTPUT_DIR}}/{{.BINARY}} ./cmd/server
 
-  bump-minor:
-    desc: "Bump the minor version"
+  run:
+    desc: "Run the MCP server (stdio + HTTP)"
+    deps: [setup]
     cmds:
-      - bump2version minor --allow-dirty
+      - GOMODCACHE={{.GOMODCACHE}} GOCACHE={{.GOCACHE}} go run ./cmd/server
 
-  chat:
-    desc: "Launch interactive chat with OpenAI"
+  clean:
+    desc: "Remove build artefacts"
     cmds:
-      - ./scripts/ai-chat.py
-    requires:
-      vars: [OPENAI_API_KEY]
+      - rm -rf {{.OUTPUT_DIR}}
+
+  release:snapshot:
+    desc: "Run GoReleaser snapshot (dry-run) build"
+    deps: [build]
+    cmds:
+      - goreleaser release --snapshot --clean

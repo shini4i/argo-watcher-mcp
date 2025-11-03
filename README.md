@@ -18,64 +18,83 @@ A simple service that exposes an [argo-watcher](https://github.com/shini4i/argo-
 
 - Exposes argo-watcher deployment tasks as an MCP tool.
 - Filter deployments by application name and time range.
+- Runs over stdio and HTTP (streamable SSE) via the official MCP Go SDK.
 - Packaged as a production-ready Docker container.
-- Simple, dependency-isolated architecture.
+- Modular, testable Go architecture.
 
 ## Prerequisites
 
-- Python 3.13+
-- Poetry for dependency management.
-- Docker for containerized deployment.
-- A running instance of argo-watcher.
+- Go 1.25+ (for local builds and development).
+- Docker 24+ (optional, for containerized deployment).
+- [Task](https://taskfile.dev) 3.x (optional, to use the provided Taskfile).
+- A running instance of [argo-watcher](https://github.com/shini4i/argo-watcher).
 
-## Usage
+## Quickstart
 
-This section outlines the full process for setting up the environment and running the interactive AI chat client.
+1. **Ensure argo-watcher is running**
 
-1.  **Bootstrap `argo-watcher` Service**
+   The MCP server reads deployment data from an existing argo-watcher instance. You can bootstrap one quickly using the [official docker-compose file](https://github.com/shini4i/argo-watcher/blob/main/docker-compose.yml).
 
-    The MCP server depends on a running `argo-watcher` instance. You can quickly bootstrap this service using the official `docker-compose.yml` from the [argo-watcher repository](https://github.com/shini4i/argo-watcher/blob/main/docker-compose.yml).
+   ```bash
+   # In the argo-watcher repository
+   docker compose up
+   ```
 
-    ```bash
-    # In a separate terminal, from the argo-watcher project directory:
-    docker-compose up
-    ```
+2. **Configure the MCP server**
 
-2.  **Start `argo-watcher-mcp` Server**
+   Export the required environment variables:
 
-    With `argo-watcher` running, start the MCP server. This project includes a convenience task for this purpose.
+   ```bash
+   export ARGO_WATCHER_URL="http://localhost:8001"  # adjust to your deployment
+   export HTTP_LISTEN_ADDR=":8000"
+   ```
 
-    ```bash
-    # From this project's root directory:
-    task run
-    ```
+3. **Run the server locally**
 
-3.  **Configure OpenAI Credentials**
+   ```bash
+   task run
+   ```
 
-    The AI chat client requires an OpenAI API key. Export it as an environment variable in the terminal where you plan to run the chat.
+   The process exposes:
 
-    ```bash
-    export OPENAI_API_KEY="sk-..."
-    ```
+   - An MCP streamable HTTP endpoint on `HTTP_LISTEN_ADDR` (default `:8000`).
+   - stdio transport on the launched process stdin/stdout (usable by MCP-compatible CLIs).
 
-4.  **Launch the Interactive AI Chat**
+4. **(Optional) Run via Docker**
 
-    Finally, run the AI chat client using its pre-configured task.
+   ```bash
+   GOOS=linux GOARCH=amd64 go build -o argo-watcher-mcp ./cmd/server
+   docker build -t argo-watcher-mcp .
+   docker run --rm -p 8000:8000 \
+     -e ARGO_WATCHER_URL="http://host.docker.internal:8001" \
+     argo-watcher-mcp
+   ```
 
-    ```bash
-    # This will start the interactive chat session.
-    task chat
-    ```
+## Configuration
 
-5.  **Ask Questions**
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `ARGO_WATCHER_URL` | _none_ (required) | Base URL of the upstream argo-watcher service. |
+| `HTTP_LISTEN_ADDR` | `:8000` | Address for the HTTP/SSE transport. |
+| `ENABLE_HTTP_TRANSPORT` | `true` | Toggle the HTTP transport while keeping stdio available. |
+| `REQUEST_TIMEOUT` | `15s` | HTTP timeout for downstream argo-watcher requests. |
+| `APP_NAME` | `argo-watcher-mcp` | Metadata surfaced via MCP implementation info. |
+| `APP_VERSION` | `0.0.1-dev` | Version surfaced via MCP implementation info. |
 
-    The script will enter an interactive loop. You can now ask questions about your deployments in natural language.
+## Development
 
-<div align="center">
+Common tasks are exposed via the included `Taskfile`:
 
-<img src="https://raw.githubusercontent.com/shini4i/assets/main/src/argo-watcher-mcp/argo-watcher-mcp-chat.png" alt="Showcase" width="680" height="380">
+- `task test` – run unit tests.
+- `task build` – compile the server binary into `bin/argo-watcher-mcp`.
+- `task fmt` – format the Go sources.
+- `task tidy` – tidy module dependencies.
+- `task vet` – execute `go vet ./...`.
+- `task run` – start the server locally with stdio + HTTP transports.
 
-</div>
+Module and build caches live inside `.cache/` and are ignored by git.
+
+Releases are produced with [GoReleaser](https://goreleaser.com/) and publish multi-architecture container images (`linux/amd64` and `linux/arm64`) to GHCR when tags matching `v*.*.*` are pushed.
 
 ## Contributing
 

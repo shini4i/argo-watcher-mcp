@@ -5,4 +5,8 @@
 
 .env
 
+.cache/
+bin/
+argo-watcher-mcp
+
 **/__pycache__/
