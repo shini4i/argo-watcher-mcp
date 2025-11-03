@@ -4,6 +4,5 @@
 .task/
 
 .env
-.envrc
 
 **/__pycache__/
