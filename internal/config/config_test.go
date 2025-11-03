@@ -39,11 +39,12 @@ func TestLoadSuccess(t *testing.T) {
 	}
 }
 
-func TestLoadMissingRequired(t *testing.T) {
-	keys := []string{"ENABLE_HTTP_TRANSPORT", "APP_NAME", "APP_VERSION", "HTTP_LISTEN_ADDR", "REQUEST_TIMEOUT"}
-	for _, key := range keys {
-		t.Setenv(key, "")
-	}
+func TestLoadMissingArgoWatcherURL(t *testing.T) {
+	t.Setenv("APP_NAME", "test-app")
+	t.Setenv("APP_VERSION", "1.2.3")
+	t.Setenv("HTTP_LISTEN_ADDR", "127.0.0.1:9000")
+	t.Setenv("REQUEST_TIMEOUT", "30s")
+	t.Setenv("ENABLE_HTTP_TRANSPORT", "true")
 
 	prev, has := os.LookupEnv("ARGO_WATCHER_URL")
 	os.Unsetenv("ARGO_WATCHER_URL")
@@ -51,7 +52,11 @@ func TestLoadMissingRequired(t *testing.T) {
 		t.Cleanup(func() { os.Setenv("ARGO_WATCHER_URL", prev) })
 	}
 
-	if _, err := Load(); err == nil {
-		t.Fatal("expected error when required ARGO_WATCHER_URL is missing")
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load returned error: %v", err)
+	}
+	if cfg.ArgoWatcherBaseURL != "" {
+		t.Fatalf("expected empty ArgoWatcherBaseURL when ARGO_WATCHER_URL missing, got %q", cfg.ArgoWatcherBaseURL)
 	}
 }

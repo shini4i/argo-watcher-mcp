@@ -36,9 +36,5 @@ func Load() (Config, error) {
 		return Config{}, fmt.Errorf("parse environment: %w", err)
 	}
 
-	if cfg.ArgoWatcherBaseURL == "" {
-		return Config{}, fmt.Errorf("parse environment: ARGO_WATCHER_URL is required")
-	}
-
 	return cfg, nil
 }
