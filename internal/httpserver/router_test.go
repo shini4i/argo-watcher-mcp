@@ -74,3 +74,24 @@ func TestRouterWithMCPHandler(t *testing.T) {
 		t.Fatalf("expected status 202, got %d", resp.StatusCode)
 	}
 }
+
+func TestRouterWithoutMCPHandler(t *testing.T) {
+	router := NewRouter(&stubChecker{}, nil, false)
+	server := httptest.NewServer(router)
+	defer server.Close()
+
+	resp, err := http.Get(server.URL + "/unknown")
+	if err != nil {
+		t.Fatalf("not found request failed: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusNotFound {
+		t.Fatalf("expected 404, got %d", resp.StatusCode)
+	}
+
+	body, _ := io.ReadAll(resp.Body)
+	if !strings.Contains(string(body), `"error":"not found"`) {
+		t.Fatalf("unexpected body: %s", string(body))
+	}
+}

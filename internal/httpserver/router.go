@@ -1,7 +1,9 @@
 package httpserver
 
 import (
+	"bytes"
 	"encoding/json"
+	"log"
 	"net/http"
 
 	"github.com/go-chi/chi/v5"
@@ -49,7 +51,15 @@ func NewRouter(checker domain.HealthChecker, mcpHandler http.Handler, enableMCP 
 }
 
 func writeJSON(w http.ResponseWriter, status int, payload any) {
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(payload); err != nil {
+		http.Error(w, `{"error":"failed to encode response"}`, http.StatusInternalServerError)
+		return
+	}
+
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
-	_ = json.NewEncoder(w).Encode(payload)
+	if _, err := buf.WriteTo(w); err != nil {
+		log.Printf("httpserver: writeJSON write failure: %v", err)
+	}
 }

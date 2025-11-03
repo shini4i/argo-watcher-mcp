@@ -1,3 +1,5 @@
+version: 2
+
 project_name: argo-watcher-mcp
 
 env:
@@ -62,11 +64,6 @@ docker_manifests:
     image_templates:
       - ghcr.io/shini4i/argo-watcher-mcp:latest-linux-amd64
       - ghcr.io/shini4i/argo-watcher-mcp:latest-linux-arm64
-
-archives:
-  - format: tar.gz
-    builds:
-      - server
 
 checksum:
   name_template: checksums.txt

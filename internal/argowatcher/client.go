@@ -49,7 +49,9 @@ func (c *Client) Check(ctx context.Context) error {
 		return fmt.Errorf("health request: unexpected status %d", resp.StatusCode)
 	}
 
-	io.Copy(io.Discard, resp.Body)
+	if _, err := io.Copy(io.Discard, resp.Body); err != nil {
+		return fmt.Errorf("drain response body: %w", err)
+	}
 	return nil
 }
 
