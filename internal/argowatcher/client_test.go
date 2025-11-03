@@ -3,13 +3,27 @@ package argowatcher
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/shini4i/argo-watcher-mcp/internal/domain"
 )
+
+type mockHTTPClient struct {
+	resp   *http.Response
+	respErr error
+}
+
+func (m *mockHTTPClient) Do(*http.Request) (*http.Response, error) {
+	if m.resp != nil {
+		return m.resp, nil
+	}
+	return nil, m.respErr
+}
 
 func TestCheckSuccess(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -63,7 +77,10 @@ func TestListDeployments(t *testing.T) {
 					"app":           "api",
 					"author":        "alice",
 					"project":       "proj",
-					"images":        []any{map[string]any{"image": "repo", "tag": "v1"}},
+					"images": []any{
+						map[string]any{"image": "repo", "tag": "v1"},
+						map[string]any{"image": "", "tag": ""},
+					},
 					"status":        "Success",
 					"created":       time.Unix(10, 0).UTC(),
 					"updated":       time.Unix(20, 0).UTC(),
@@ -94,10 +111,105 @@ func TestListDeployments(t *testing.T) {
 	if len(deployments) != 1 {
 		t.Fatalf("expected one deployment, got %d", len(deployments))
 	}
+	if len(deployments[0].Images) != 1 {
+		t.Fatalf("expected one image after filtering, got %d", len(deployments[0].Images))
+	}
+	if deployments[0].Images[0].Image != "repo" || deployments[0].Images[0].Tag != "v1" {
+		t.Fatalf("unexpected image payload: %#v", deployments[0].Images[0])
+	}
 
 	select {
 	case <-requested:
 	default:
 		t.Fatalf("request was not received")
+	}
+}
+
+func TestListDeploymentsHandlesNonSuccessStatus(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusBadGateway)
+		w.Write([]byte("upstream failed"))
+	}))
+	defer srv.Close()
+
+	client := New(srv.URL, srv.Client(), nil)
+	if _, err := client.ListDeployments(context.Background(), domain.DeploymentFilter{}); err == nil {
+		t.Fatal("expected error for non-success status")
+	}
+}
+
+func TestListDeploymentsDecodeError(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte("not-json"))
+	}))
+	defer srv.Close()
+
+	client := New(srv.URL, srv.Client(), nil)
+	if _, err := client.ListDeployments(context.Background(), domain.DeploymentFilter{}); err == nil {
+		t.Fatal("expected error decoding payload")
+	}
+}
+
+func TestListDeploymentsToDomainError(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		json.NewEncoder(w).Encode(map[string]any{
+			"tasks": []any{
+				map[string]any{
+					"id":      "task-1",
+					"app":     "app",
+					"author":  "author",
+					"project": "proj",
+				},
+			},
+		})
+	}))
+	defer srv.Close()
+
+	client := New(srv.URL, srv.Client(), nil)
+	if _, err := client.ListDeployments(context.Background(), domain.DeploymentFilter{}); err == nil {
+		t.Fatal("expected error when payload missing timestamps")
+	}
+}
+
+func TestCheckNetworkError(t *testing.T) {
+	client := New("http://example.com", &mockHTTPClient{respErr: errors.New("connection refused")}, nil)
+
+	err := client.Check(context.Background())
+	if err == nil {
+		t.Fatal("expected error, got nil")
+	}
+	if !strings.Contains(err.Error(), "health request") {
+		t.Fatalf("expected error to mention health request, got %v", err)
+	}
+}
+
+func TestListDeploymentsNetworkError(t *testing.T) {
+	client := New("http://example.com", &mockHTTPClient{respErr: errors.New("connection refused")}, nil)
+
+	_, err := client.ListDeployments(context.Background(), domain.DeploymentFilter{FromTimestamp: 10})
+	if err == nil {
+		t.Fatal("expected error, got nil")
+	}
+	if !strings.Contains(err.Error(), "fetch tasks") {
+		t.Fatalf("expected error to mention fetch tasks, got %v", err)
+	}
+}
+
+func TestRequestBuildFailures(t *testing.T) {
+	invalidURL := "http://\x7f.invalid"
+	client := New(invalidURL, &mockHTTPClient{}, nil)
+
+	if err := client.Check(context.Background()); err == nil || !strings.Contains(err.Error(), "build health request") {
+		t.Fatalf("expected build health request error, got %v", err)
+	}
+
+	_, err := client.ListDeployments(context.Background(), domain.DeploymentFilter{FromTimestamp: time.Now().Unix()})
+	if err == nil {
+		t.Fatal("expected error for malformed base URL")
+	}
+	if !strings.Contains(err.Error(), "parse tasks endpoint") {
+		t.Fatalf("expected parse tasks endpoint error, got %v", err)
 	}
 }

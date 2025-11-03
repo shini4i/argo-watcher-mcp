@@ -17,6 +17,29 @@ import (
 	"github.com/shini4i/argo-watcher-mcp/internal/mcpserver"
 )
 
+type mcpRunner interface {
+	RunStdio(context.Context) error
+	StreamableHandler() http.Handler
+}
+
+type httpServer interface {
+	ListenAndServe() error
+	Shutdown(context.Context) error
+}
+
+var (
+	newMCPServer = func(opts mcpserver.Options) (mcpRunner, error) {
+		return mcpserver.New(opts)
+	}
+	newHTTPRouter = httpserver.NewRouter
+	newHTTPServer = func(addr string, handler http.Handler) httpServer {
+		return &http.Server{
+			Addr:    addr,
+			Handler: handler,
+		}
+	}
+)
+
 // Application wires transports and dependencies for the MCP server.
 type Application struct {
 	cfg    config.Config
@@ -59,7 +82,7 @@ func (a *Application) Run(ctx context.Context) error {
 
 	argoClient := argowatcher.New(a.cfg.ArgoWatcherBaseURL, httpClient, a.logger)
 
-	mcpSrv, err := mcpserver.New(mcpserver.Options{
+	mcpSrv, err := newMCPServer(mcpserver.Options{
 		Name:    a.cfg.Name,
 		Version: a.cfg.Version,
 		Service: argoClient,
@@ -74,12 +97,8 @@ func (a *Application) Run(ctx context.Context) error {
 		handler = mcpSrv.StreamableHandler()
 	}
 
-	router := httpserver.NewRouter(a.logger, argoClient, handler, a.cfg.EnableHTTPTransport)
-
-	httpSrv := &http.Server{
-		Addr:    a.cfg.HTTPListenAddr,
-		Handler: router,
-	}
+	router := newHTTPRouter(a.logger, argoClient, handler, a.cfg.EnableHTTPTransport)
+	httpSrv := newHTTPServer(a.cfg.HTTPListenAddr, router)
 
 	group, groupCtx := errgroup.WithContext(ctx)
 
