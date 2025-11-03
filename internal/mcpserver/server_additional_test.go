@@ -55,3 +55,12 @@ func TestStreamableHandlerServesRequests(t *testing.T) {
 		t.Fatal("expected StreamableHandler to write a response")
 	}
 }
+
+func TestGetDeploymentsHandlerNowUnixNilClock(t *testing.T) {
+	handler := &getDeploymentsHandler{}
+
+	got := handler.nowUnix()
+	if got <= 0 {
+		t.Fatalf("expected positive unix timestamp, got %d", got)
+	}
+}

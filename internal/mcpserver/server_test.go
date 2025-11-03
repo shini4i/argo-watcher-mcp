@@ -2,6 +2,8 @@ package mcpserver
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"testing"
 	"time"
 
@@ -100,5 +102,51 @@ func TestGetDeploymentsHandlerValidations(t *testing.T) {
 	to := int64(10)
 	if _, _, err := handler.Handle(context.Background(), nil, getDeploymentsInput{FromUnix: &from, ToUnix: &to}); err == nil {
 		t.Fatalf("expected error when from > to")
+	}
+}
+
+func TestGetDeploymentsHandlerServiceError(t *testing.T) {
+	wantErr := fmt.Errorf("boom")
+	fakeService := &stubDeploymentService{
+		err: wantErr,
+	}
+
+	handler := &getDeploymentsHandler{
+		clock: clock.FixedClock{At: time.Unix(100, 0)},
+		svc:   fakeService,
+	}
+
+	_, _, err := handler.Handle(context.Background(), nil, getDeploymentsInput{})
+	if err == nil {
+		t.Fatalf("expected error, got nil")
+	}
+	if !errors.Is(err, wantErr) {
+		t.Fatalf("expected error %v, got %v", wantErr, err)
+	}
+}
+
+func TestGetDeploymentsHandlerDaysHistoryOverride(t *testing.T) {
+	now := time.Unix(200, 0)
+	fakeClock := clock.FixedClock{At: now}
+	fakeService := &stubDeploymentService{}
+
+	handler := &getDeploymentsHandler{
+		clock: fakeClock,
+		svc:   fakeService,
+	}
+
+	days := 5
+	if _, _, err := handler.Handle(context.Background(), nil, getDeploymentsInput{DaysHistory: &days}); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	wantTo := now.Unix()
+	wantFrom := wantTo - int64(days)*24*60*60
+
+	if fakeService.capturedFilter.FromTimestamp != wantFrom {
+		t.Fatalf("expected from timestamp %d, got %d", wantFrom, fakeService.capturedFilter.FromTimestamp)
+	}
+	if fakeService.capturedFilter.ToTimestamp != wantTo {
+		t.Fatalf("expected to timestamp %d, got %d", wantTo, fakeService.capturedFilter.ToTimestamp)
 	}
 }

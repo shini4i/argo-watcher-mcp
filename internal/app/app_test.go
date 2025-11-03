@@ -6,6 +6,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"strings"
 	"testing"
 	"time"
 
@@ -28,6 +29,15 @@ func TestWithClockOverridesClock(t *testing.T) {
 	a.WithClock(fakeClock)
 	if _, ok := a.clock.(clock.FixedClock); !ok {
 		t.Fatalf("expected clock to be FixedClock, got %T", a.clock)
+	}
+}
+
+func TestWithClockNil(t *testing.T) {
+	a := New(config.Config{}, slog.New(slog.NewJSONHandler(io.Discard, nil)))
+	a.WithClock(nil)
+
+	if _, ok := a.clock.(clock.SystemClock); !ok {
+		t.Fatalf("expected clock to remain SystemClock, got %T", a.clock)
 	}
 }
 
@@ -141,5 +151,86 @@ func TestRunPropagatesErrors(t *testing.T) {
 
 	if err := a.Run(context.Background()); !errors.Is(err, errBoom) {
 		t.Fatalf("expected error %v, got %v", errBoom, err)
+	}
+}
+
+func TestRunPropagatesStdioError(t *testing.T) {
+	stubMCP := &stubMCPServer{runErr: errors.New("stdio failed")}
+	stubHTTP := &stubHTTPServer{listenErr: http.ErrServerClosed}
+
+	setupRunTest(t, stubMCP, stubHTTP)
+
+	a := New(config.Config{
+		ArgoWatcherBaseURL:  "https://example.com",
+		EnableHTTPTransport: true,
+	}, slog.New(slog.NewJSONHandler(io.Discard, nil)))
+
+	err := a.Run(context.Background())
+	if err == nil || !strings.Contains(err.Error(), "stdio failed") {
+		t.Fatalf("expected stdio failure, got %v", err)
+	}
+}
+
+func TestRunPropagatesHTTPListenError(t *testing.T) {
+	stubMCP := &stubMCPServer{runErr: context.Canceled}
+	stubHTTP := &stubHTTPServer{listenErr: errors.New("listen failed")}
+
+	setupRunTest(t, stubMCP, stubHTTP)
+
+	a := New(config.Config{ArgoWatcherBaseURL: "https://example.com"}, slog.New(slog.NewJSONHandler(io.Discard, nil)))
+
+	err := a.Run(context.Background())
+	if err == nil || !strings.Contains(err.Error(), "listen failed") {
+		t.Fatalf("expected listen failure, got %v", err)
+	}
+}
+
+func TestRunPropagatesHTTPShutdownError(t *testing.T) {
+	stubMCP := &stubMCPServer{runErr: context.Canceled}
+	stubHTTP := &stubHTTPServer{
+		listenErr:   http.ErrServerClosed,
+		shutdownErr: errors.New("shutdown failed"),
+	}
+
+	setupRunTest(t, stubMCP, stubHTTP)
+
+	a := New(config.Config{
+		ArgoWatcherBaseURL:  "https://example.com",
+		EnableHTTPTransport: true,
+	}, slog.New(slog.NewJSONHandler(io.Discard, nil)))
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	err := a.Run(ctx)
+	if err == nil || !errors.Is(err, stubHTTP.shutdownErr) {
+		t.Fatalf("expected shutdown failure, got %v", err)
+	}
+}
+
+func setupRunTest(t *testing.T, stubMCP *stubMCPServer, stubHTTP *stubHTTPServer) {
+	origNewMCP := newMCPServer
+	origRouter := newHTTPRouter
+	origHTTPServer := newHTTPServer
+
+	t.Cleanup(func() {
+		newMCPServer = origNewMCP
+		newHTTPRouter = origRouter
+		newHTTPServer = origHTTPServer
+	})
+
+	newMCPServer = func(opts mcpserver.Options) (mcpRunner, error) {
+		if opts.Service == nil {
+			t.Fatal("expected service to be configured")
+		}
+		return stubMCP, nil
+	}
+
+	newHTTPRouter = func(logger *slog.Logger, checker domain.HealthChecker, handler http.Handler, enable bool) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {})
+	}
+
+	newHTTPServer = func(addr string, handler http.Handler) httpServer {
+		return stubHTTP
 	}
 }
