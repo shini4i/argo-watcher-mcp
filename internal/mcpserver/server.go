@@ -21,10 +21,15 @@ type Server struct {
 
 // Options configure the server.
 type Options struct {
-	Name    string
+	// Name identifies the MCP implementation exposed to clients.
+	Name string
+	// Version advertises the semantic version reported via MCP metadata.
 	Version string
+	// Service fetches deployment data backing the MCP tool responses.
 	Service domain.DeploymentService
-	Clock   clock.Clock
+	// Clock supplies time readings for defaulting request ranges. When unset the
+	// system clock is used.
+	Clock clock.Clock
 }
 
 // New constructs an MCP server with all tools registered.

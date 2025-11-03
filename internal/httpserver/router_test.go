@@ -75,6 +75,31 @@ func TestRouterWithMCPHandler(t *testing.T) {
 	}
 }
 
+func TestRouterWithMCPHandlerDisabled(t *testing.T) {
+	var called bool
+	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		called = true
+		w.WriteHeader(http.StatusAccepted)
+	})
+
+	router := NewRouter(&stubChecker{}, handler, false)
+	server := httptest.NewServer(router)
+	defer server.Close()
+
+	resp, err := http.Get(server.URL + "/")
+	if err != nil {
+		t.Fatalf("request failed: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusNotFound {
+		t.Fatalf("expected 404, got %d", resp.StatusCode)
+	}
+	if called {
+		t.Fatalf("mcp handler should not be invoked when disabled")
+	}
+}
+
 func TestRouterWithoutMCPHandler(t *testing.T) {
 	router := NewRouter(&stubChecker{}, nil, false)
 	server := httptest.NewServer(router)
