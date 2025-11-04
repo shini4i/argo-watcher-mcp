@@ -65,9 +65,9 @@ func (m *mcpRequestMetrics) RecordFailure(ctx context.Context) {
 
 type noopMCPRequestMetrics struct{}
 
-func (noopMCPRequestMetrics) RecordSuccess(context.Context) {}
-func (noopMCPRequestMetrics) RecordInvalid(context.Context) {}
-func (noopMCPRequestMetrics) RecordFailure(context.Context) {}
+func (noopMCPRequestMetrics) RecordSuccess(context.Context) { return }
+func (noopMCPRequestMetrics) RecordInvalid(context.Context) { return }
+func (noopMCPRequestMetrics) RecordFailure(context.Context) { return }
 
 // ArgoWatcherReachability reports whether the downstream Argo Watcher instance is reachable.
 type ArgoWatcherReachability interface {
@@ -128,5 +128,5 @@ func (r *argoWatcherReachability) ReportUnreachable() {
 
 type noopArgoWatcherReachability struct{}
 
-func (noopArgoWatcherReachability) ReportReachable()   {}
-func (noopArgoWatcherReachability) ReportUnreachable() {}
+func (noopArgoWatcherReachability) ReportReachable()   { return }
+func (noopArgoWatcherReachability) ReportUnreachable() { return }
