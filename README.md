@@ -86,6 +86,14 @@ A simple service that exposes an [argo-watcher](https://github.com/shini4i/argo-
 | `APP_NAME` | `argo-watcher-mcp` | Metadata surfaced via MCP implementation info. |
 | `APP_VERSION` | `0.0.1-dev` | Version surfaced via MCP implementation info. |
 
+### Telemetry & Metrics
+
+When telemetry is enabled, the HTTP transport exposes Prometheus metrics at `/metrics`. Key series:
+
+- `argo_watcher_mcp_requests_total{result="success|invalid|failed"}` – MCP tool call counter partitioned by result label; filter by `result` to obtain invalid or failed counts.
+- `argo_watcher_reachable` – gauge reporting downstream reachability (`1` when Argo Watcher responded successfully, `0` otherwise).
+- Standard Go runtime (`go_*`) and process metrics are registered on the Prometheus endpoint to aid capacity monitoring.
+
 ## Development
 
 Common tasks are exposed via the included `Taskfile`:

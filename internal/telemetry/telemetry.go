@@ -72,6 +72,12 @@ func NewProvider(ctx context.Context, cfg config.Config, logger *slog.Logger) (*
 	}
 
 	registry := clientprom.NewRegistry()
+	if err := registerPrometheusCollector(registry, clientprom.NewProcessCollector(clientprom.ProcessCollectorOpts{})); err != nil {
+		return nil, err
+	}
+	if err := registerPrometheusCollector(registry, clientprom.NewGoCollector()); err != nil {
+		return nil, err
+	}
 	promExporter, err := otelprom.New(otelprom.WithRegisterer(registry))
 	if err != nil {
 		return nil, fmt.Errorf("create prometheus exporter: %w", err)
@@ -159,4 +165,15 @@ func otlpTransportCredentials(cfg config.Config) credentials.TransportCredential
 	}
 
 	return credentials.NewTLS(&tls.Config{})
+}
+
+func registerPrometheusCollector(registry *clientprom.Registry, collector clientprom.Collector) error {
+	if err := registry.Register(collector); err != nil {
+		var already clientprom.AlreadyRegisteredError
+		if errors.As(err, &already) {
+			return nil
+		}
+		return fmt.Errorf("register prometheus collector: %w", err)
+	}
+	return nil
 }

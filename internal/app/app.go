@@ -95,7 +95,26 @@ func (a *Application) Run(ctx context.Context) error {
 	}
 	defer httpClient.CloseIdleConnections()
 
-	argoClient := argowatcher.New(a.cfg.ArgoWatcherBaseURL, httpClient, a.logger)
+	requestMetrics := telemetry.NoopMCPRequestMetrics()
+	if metrics, err := telemetry.NewMCPRequestMetrics(); err != nil {
+		a.logger.Error("init MCP request metrics", "err", err)
+	} else {
+		requestMetrics = metrics
+	}
+
+	reachabilityMetrics := telemetry.NoopArgoWatcherReachability()
+	if tracker, err := telemetry.NewArgoWatcherReachability(); err != nil {
+		a.logger.Error("init Argo Watcher reachability metrics", "err", err)
+	} else {
+		reachabilityMetrics = tracker
+	}
+
+	argoClient := argowatcher.New(
+		a.cfg.ArgoWatcherBaseURL,
+		httpClient,
+		a.logger,
+		argowatcher.WithReachabilityMetrics(reachabilityMetrics),
+	)
 
 	mcpSrv, err := newMCPServer(mcpserver.Options{
 		Name:    a.cfg.Name,
@@ -103,6 +122,7 @@ func (a *Application) Run(ctx context.Context) error {
 		Service: argoClient,
 		Clock:   a.clock,
 		Logger:  a.logger,
+		Metrics: requestMetrics,
 	})
 	if err != nil {
 		return fmt.Errorf("create mcp server: %w", err)

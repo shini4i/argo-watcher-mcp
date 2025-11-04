@@ -25,6 +25,19 @@ func (m *mockHTTPClient) Do(*http.Request) (*http.Response, error) {
 	return nil, m.respErr
 }
 
+type trackingReachability struct {
+	reachable   int
+	unreachable int
+}
+
+func (t *trackingReachability) ReportReachable() {
+	t.reachable++
+}
+
+func (t *trackingReachability) ReportUnreachable() {
+	t.unreachable++
+}
+
 func TestCheckSuccess(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/healthz" {
@@ -34,9 +47,13 @@ func TestCheckSuccess(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	client := New(srv.URL, srv.Client(), nil)
+	metrics := &trackingReachability{}
+	client := New(srv.URL, srv.Client(), nil, WithReachabilityMetrics(metrics))
 	if err := client.Check(context.Background()); err != nil {
 		t.Fatalf("expected no error, got %v", err)
+	}
+	if metrics.reachable != 1 || metrics.unreachable != 0 {
+		t.Fatalf("expected reachability metrics reachable=1 unreachable=0, got %d/%d", metrics.reachable, metrics.unreachable)
 	}
 }
 
@@ -46,9 +63,13 @@ func TestCheckFailure(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	client := New(srv.URL, srv.Client(), nil)
+	metrics := &trackingReachability{}
+	client := New(srv.URL, srv.Client(), nil, WithReachabilityMetrics(metrics))
 	if err := client.Check(context.Background()); err == nil {
 		t.Fatalf("expected error, got nil")
+	}
+	if metrics.reachable != 0 || metrics.unreachable != 1 {
+		t.Fatalf("expected reachability metrics reachable=0 unreachable=1, got %d/%d", metrics.reachable, metrics.unreachable)
 	}
 }
 
@@ -97,7 +118,8 @@ func TestListDeployments(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	client := New(srv.URL, srv.Client(), nil)
+	metrics := &trackingReachability{}
+	client := New(srv.URL, srv.Client(), nil, WithReachabilityMetrics(metrics))
 	app := "api"
 	deployments, err := client.ListDeployments(context.Background(), domain.DeploymentFilter{
 		App:           &app,
@@ -122,6 +144,9 @@ func TestListDeployments(t *testing.T) {
 	case <-requested:
 	default:
 		t.Fatalf("request was not received")
+	}
+	if metrics.reachable != 1 || metrics.unreachable != 0 {
+		t.Fatalf("expected reachability metrics reachable=1 unreachable=0, got %d/%d", metrics.reachable, metrics.unreachable)
 	}
 }
 
@@ -212,9 +237,13 @@ func TestListDeploymentsHandlesNonSuccessStatus(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	client := New(srv.URL, srv.Client(), nil)
+	metrics := &trackingReachability{}
+	client := New(srv.URL, srv.Client(), nil, WithReachabilityMetrics(metrics))
 	if _, err := client.ListDeployments(context.Background(), domain.DeploymentFilter{}); err == nil {
 		t.Fatal("expected error for non-success status")
+	}
+	if metrics.reachable != 0 || metrics.unreachable != 1 {
+		t.Fatalf("expected reachability metrics reachable=0 unreachable=1, got %d/%d", metrics.reachable, metrics.unreachable)
 	}
 }
 
@@ -225,9 +254,13 @@ func TestListDeploymentsDecodeError(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	client := New(srv.URL, srv.Client(), nil)
+	metrics := &trackingReachability{}
+	client := New(srv.URL, srv.Client(), nil, WithReachabilityMetrics(metrics))
 	if _, err := client.ListDeployments(context.Background(), domain.DeploymentFilter{}); err == nil {
 		t.Fatal("expected error decoding payload")
+	}
+	if metrics.reachable != 1 || metrics.unreachable != 0 {
+		t.Fatalf("expected reachability metrics reachable=1 unreachable=0, got %d/%d", metrics.reachable, metrics.unreachable)
 	}
 }
 
@@ -247,14 +280,19 @@ func TestListDeploymentsToDomainError(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	client := New(srv.URL, srv.Client(), nil)
+	metrics := &trackingReachability{}
+	client := New(srv.URL, srv.Client(), nil, WithReachabilityMetrics(metrics))
 	if _, err := client.ListDeployments(context.Background(), domain.DeploymentFilter{}); err == nil {
 		t.Fatal("expected error when payload missing timestamps")
+	}
+	if metrics.reachable != 1 || metrics.unreachable != 0 {
+		t.Fatalf("expected reachability metrics reachable=1 unreachable=0, got %d/%d", metrics.reachable, metrics.unreachable)
 	}
 }
 
 func TestCheckNetworkError(t *testing.T) {
-	client := New("http://example.com", &mockHTTPClient{respErr: errors.New("connection refused")}, nil)
+	metrics := &trackingReachability{}
+	client := New("http://example.com", &mockHTTPClient{respErr: errors.New("connection refused")}, nil, WithReachabilityMetrics(metrics))
 
 	err := client.Check(context.Background())
 	if err == nil {
@@ -263,10 +301,14 @@ func TestCheckNetworkError(t *testing.T) {
 	if !strings.Contains(err.Error(), "health request") {
 		t.Fatalf("expected error to mention health request, got %v", err)
 	}
+	if metrics.reachable != 0 || metrics.unreachable != 1 {
+		t.Fatalf("expected reachability metrics reachable=0 unreachable=1, got %d/%d", metrics.reachable, metrics.unreachable)
+	}
 }
 
 func TestListDeploymentsNetworkError(t *testing.T) {
-	client := New("http://example.com", &mockHTTPClient{respErr: errors.New("connection refused")}, nil)
+	metrics := &trackingReachability{}
+	client := New("http://example.com", &mockHTTPClient{respErr: errors.New("connection refused")}, nil, WithReachabilityMetrics(metrics))
 
 	_, err := client.ListDeployments(context.Background(), domain.DeploymentFilter{FromTimestamp: 10})
 	if err == nil {
@@ -275,11 +317,15 @@ func TestListDeploymentsNetworkError(t *testing.T) {
 	if !strings.Contains(err.Error(), "fetch tasks") {
 		t.Fatalf("expected error to mention fetch tasks, got %v", err)
 	}
+	if metrics.reachable != 0 || metrics.unreachable != 1 {
+		t.Fatalf("expected reachability metrics reachable=0 unreachable=1, got %d/%d", metrics.reachable, metrics.unreachable)
+	}
 }
 
 func TestRequestBuildFailures(t *testing.T) {
 	invalidURL := "http://\x7f.invalid"
-	client := New(invalidURL, &mockHTTPClient{}, nil)
+	metrics := &trackingReachability{}
+	client := New(invalidURL, &mockHTTPClient{}, nil, WithReachabilityMetrics(metrics))
 
 	if err := client.Check(context.Background()); err == nil || !strings.Contains(err.Error(), "build health request") {
 		t.Fatalf("expected build health request error, got %v", err)
@@ -291,5 +337,8 @@ func TestRequestBuildFailures(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "parse tasks endpoint") {
 		t.Fatalf("expected parse tasks endpoint error, got %v", err)
+	}
+	if metrics.reachable != 0 || metrics.unreachable != 2 {
+		t.Fatalf("expected reachability metrics reachable=0 unreachable=2, got %d/%d", metrics.reachable, metrics.unreachable)
 	}
 }

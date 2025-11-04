@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/shini4i/argo-watcher-mcp/internal/domain"
+	"github.com/shini4i/argo-watcher-mcp/internal/telemetry"
 )
 
 // HTTPClient models the subset of http.Client used by the Argo Watcher client.
@@ -25,40 +26,67 @@ type Client struct {
 	baseURL string
 	client  HTTPClient
 	logger  *slog.Logger
+	metrics telemetry.ArgoWatcherReachability
+}
+
+// Option customizes the behaviour of the Argo Watcher client.
+type Option func(*Client)
+
+// WithReachabilityMetrics wires reachability instrumentation into the client.
+func WithReachabilityMetrics(metrics telemetry.ArgoWatcherReachability) Option {
+	return func(c *Client) {
+		if metrics != nil {
+			c.metrics = metrics
+		}
+	}
 }
 
 // New creates a Client.
-func New(baseURL string, client HTTPClient, logger *slog.Logger) *Client {
+func New(baseURL string, client HTTPClient, logger *slog.Logger, options ...Option) *Client {
 	if logger == nil {
 		logger = slog.Default()
 	}
-	return &Client{
+	c := &Client{
 		baseURL: strings.TrimRight(baseURL, "/"),
 		client:  client,
 		logger:  logger,
+		metrics: telemetry.NoopArgoWatcherReachability(),
 	}
+
+	for _, apply := range options {
+		if apply != nil {
+			apply(c)
+		}
+	}
+
+	return c
 }
 
 // Check verifies the downstream service is responding on /healthz.
 func (c *Client) Check(ctx context.Context) error {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.baseURL+"/healthz", nil)
 	if err != nil {
+		c.metrics.ReportUnreachable()
 		return fmt.Errorf("build health request: %w", err)
 	}
 
 	resp, err := c.client.Do(req)
 	if err != nil {
+		c.metrics.ReportUnreachable()
 		return fmt.Errorf("health request: %w", err)
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		c.metrics.ReportUnreachable()
 		return fmt.Errorf("health request: unexpected status %d", resp.StatusCode)
 	}
 
 	if _, err := io.Copy(io.Discard, resp.Body); err != nil {
+		c.metrics.ReportUnreachable()
 		return fmt.Errorf("drain response body: %w", err)
 	}
+	c.metrics.ReportReachable()
 	return nil
 }
 
@@ -66,6 +94,7 @@ func (c *Client) Check(ctx context.Context) error {
 func (c *Client) ListDeployments(ctx context.Context, filter domain.DeploymentFilter) ([]domain.Deployment, error) {
 	endpoint, err := url.Parse(c.baseURL + "/api/v1/tasks")
 	if err != nil {
+		c.metrics.ReportUnreachable()
 		return nil, fmt.Errorf("parse tasks endpoint: %w", err)
 	}
 
@@ -81,11 +110,13 @@ func (c *Client) ListDeployments(ctx context.Context, filter domain.DeploymentFi
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint.String(), nil)
 	if err != nil {
+		c.metrics.ReportUnreachable()
 		return nil, fmt.Errorf("build tasks request: %w", err)
 	}
 
 	resp, err := c.client.Do(req)
 	if err != nil {
+		c.metrics.ReportUnreachable()
 		return nil, fmt.Errorf("fetch tasks: %w", err)
 	}
 	defer resp.Body.Close()
@@ -98,8 +129,10 @@ func (c *Client) ListDeployments(ctx context.Context, filter domain.DeploymentFi
 			slog.String("body", bodyStr),
 			slog.String("url", endpoint.String()),
 		)
+		c.metrics.ReportUnreachable()
 		return nil, fmt.Errorf("fetch tasks: status %d body %q", resp.StatusCode, bodyStr)
 	}
+	c.metrics.ReportReachable()
 
 	var payload struct {
 		Tasks []taskPayload `json:"tasks"`

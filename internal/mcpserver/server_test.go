@@ -27,6 +27,24 @@ func (s *stubDeploymentService) ListDeployments(_ context.Context, filter domain
 	return s.result, s.err
 }
 
+type trackingMetrics struct {
+	success int
+	invalid int
+	failure int
+}
+
+func (m *trackingMetrics) RecordSuccess(context.Context) {
+	m.success++
+}
+
+func (m *trackingMetrics) RecordInvalid(context.Context) {
+	m.invalid++
+}
+
+func (m *trackingMetrics) RecordFailure(context.Context) {
+	m.failure++
+}
+
 func TestGetDeploymentsHandlerDefaults(t *testing.T) {
 	now := time.Date(2024, time.January, 31, 12, 0, 0, 0, time.UTC)
 	fakeClock := clock.FixedClock{At: now}
@@ -35,10 +53,12 @@ func TestGetDeploymentsHandlerDefaults(t *testing.T) {
 			{ID: "task-1"},
 		},
 	}
+	metrics := &trackingMetrics{}
 
 	handler := &getDeploymentsHandler{
-		clock: fakeClock,
-		svc:   fakeService,
+		clock:   fakeClock,
+		svc:     fakeService,
+		metrics: metrics,
 	}
 
 	_, out, err := handler.Handle(context.Background(), nil, getDeploymentsInput{})
@@ -63,12 +83,17 @@ func TestGetDeploymentsHandlerDefaults(t *testing.T) {
 	if fakeService.capturedFilter.ToTimestamp != wantTo {
 		t.Fatalf("expected to_timestamp %d, got %d", wantTo, fakeService.capturedFilter.ToTimestamp)
 	}
+	if metrics.success != 1 {
+		t.Fatalf("expected success metric to record 1, got %d", metrics.success)
+	}
 }
 
 func TestGetDeploymentsHandlerCustomTimestamps(t *testing.T) {
 	fakeService := &stubDeploymentService{}
+	metrics := &trackingMetrics{}
 	handler := &getDeploymentsHandler{
-		svc: fakeService,
+		svc:     fakeService,
+		metrics: metrics,
 	}
 
 	from := int64(1700000000)
@@ -96,7 +121,10 @@ func TestGetDeploymentsHandlerCustomTimestamps(t *testing.T) {
 }
 
 func TestGetDeploymentsHandlerValidations(t *testing.T) {
-	handler := &getDeploymentsHandler{}
+	metrics := &trackingMetrics{}
+	handler := &getDeploymentsHandler{
+		metrics: metrics,
+	}
 
 	negativeDays := -1
 	if _, _, err := handler.Handle(context.Background(), nil, getDeploymentsInput{DaysHistory: &negativeDays}); err == nil {
@@ -108,6 +136,9 @@ func TestGetDeploymentsHandlerValidations(t *testing.T) {
 	if _, _, err := handler.Handle(context.Background(), nil, getDeploymentsInput{FromUnix: &from, ToUnix: &to}); err == nil {
 		t.Fatalf("expected error when from > to")
 	}
+	if metrics.invalid != 2 {
+		t.Fatalf("expected invalid metric recorded twice, got %d", metrics.invalid)
+	}
 }
 
 func TestGetDeploymentsHandlerServiceError(t *testing.T) {
@@ -115,10 +146,12 @@ func TestGetDeploymentsHandlerServiceError(t *testing.T) {
 	fakeService := &stubDeploymentService{
 		err: wantErr,
 	}
+	metrics := &trackingMetrics{}
 
 	handler := &getDeploymentsHandler{
-		clock: clock.FixedClock{At: time.Unix(100, 0)},
-		svc:   fakeService,
+		clock:   clock.FixedClock{At: time.Unix(100, 0)},
+		svc:     fakeService,
+		metrics: metrics,
 	}
 
 	_, _, err := handler.Handle(context.Background(), nil, getDeploymentsInput{})
@@ -128,16 +161,21 @@ func TestGetDeploymentsHandlerServiceError(t *testing.T) {
 	if !errors.Is(err, wantErr) {
 		t.Fatalf("expected error %v, got %v", wantErr, err)
 	}
+	if metrics.failure != 1 {
+		t.Fatalf("expected failure metric incremented once, got %d", metrics.failure)
+	}
 }
 
 func TestGetDeploymentsHandlerDaysHistoryOverride(t *testing.T) {
 	now := time.Unix(200, 0)
 	fakeClock := clock.FixedClock{At: now}
 	fakeService := &stubDeploymentService{}
+	metrics := &trackingMetrics{}
 
 	handler := &getDeploymentsHandler{
-		clock: fakeClock,
-		svc:   fakeService,
+		clock:   fakeClock,
+		svc:     fakeService,
+		metrics: metrics,
 	}
 
 	days := 5
@@ -223,6 +261,7 @@ func TestGetDeploymentsHandlerLogsProcessing(t *testing.T) {
 			slog.String("component", "mcpserver"),
 			slog.String("tool", "get_deployments"),
 		),
+		metrics: &trackingMetrics{},
 	}
 
 	ctx := context.Background()

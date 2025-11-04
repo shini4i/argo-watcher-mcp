@@ -12,6 +12,7 @@ import (
 	"github.com/shini4i/argo-watcher-mcp/internal/clock"
 	"github.com/shini4i/argo-watcher-mcp/internal/domain"
 	"github.com/shini4i/argo-watcher-mcp/internal/httpserver"
+	"github.com/shini4i/argo-watcher-mcp/internal/telemetry"
 )
 
 // Server wraps an MCP server instance and its tool registrations.
@@ -35,6 +36,8 @@ type Options struct {
 	Clock clock.Clock
 	// Logger records tool activity. When nil, slog.Default is used.
 	Logger *slog.Logger
+	// Metrics records MCP tool request outcomes. Defaults to a no-op recorder.
+	Metrics telemetry.MCPRequestMetrics
 }
 
 // New constructs an MCP server with all tools registered.
@@ -49,15 +52,21 @@ func New(opts Options) (*Server, error) {
 	}
 	logger = logger.With("component", "mcpserver")
 
+	metrics := opts.Metrics
+	if metrics == nil {
+		metrics = telemetry.NoopMCPRequestMetrics()
+	}
+
 	srv := mcp.NewServer(&mcp.Implementation{
 		Name:    opts.Name,
 		Version: opts.Version,
 	}, nil)
 
 	handler := &getDeploymentsHandler{
-		clock:  opts.Clock,
-		svc:    opts.Service,
-		logger: logger.With("tool", "get_deployments"),
+		clock:   opts.Clock,
+		svc:     opts.Service,
+		logger:  logger.With("tool", "get_deployments"),
+		metrics: metrics,
 	}
 
 	mcp.AddTool(srv, &mcp.Tool{
@@ -108,9 +117,10 @@ type getDeploymentsInput struct {
 }
 
 type getDeploymentsHandler struct {
-	clock  clock.Clock
-	svc    domain.DeploymentService
-	logger *slog.Logger
+	clock   clock.Clock
+	svc     domain.DeploymentService
+	logger  *slog.Logger
+	metrics telemetry.MCPRequestMetrics
 }
 
 // Handle executes the get_deployments tool logic and logs the processed request.
@@ -133,12 +143,18 @@ func (h *getDeploymentsHandler) Handle(ctx context.Context, _ *mcp.CallToolReque
 			days = *input.DaysHistory
 		}
 		if days < 0 {
+			if h.metrics != nil {
+				h.metrics.RecordInvalid(ctx)
+			}
 			return nil, nil, fmt.Errorf("days_history must be non-negative")
 		}
 		from = *to - int64(days)*24*60*60
 	}
 
 	if from > *to {
+		if h.metrics != nil {
+			h.metrics.RecordInvalid(ctx)
+		}
 		return nil, nil, fmt.Errorf("from_timestamp cannot be greater than to_timestamp")
 	}
 
@@ -158,12 +174,18 @@ func (h *getDeploymentsHandler) Handle(ctx context.Context, _ *mcp.CallToolReque
 			attrs := append(h.requestAttrs(filter), slog.Any("error", err))
 			logger.LogAttrs(ctx, slog.LevelError, "get_deployments failed", attrs...)
 		}
+		if h.metrics != nil {
+			h.metrics.RecordFailure(ctx)
+		}
 		return nil, nil, err
 	}
 
 	if logger != nil {
 		attrs := append(h.requestAttrs(filter), slog.Int("count", len(result)))
 		logger.LogAttrs(ctx, slog.LevelInfo, "get_deployments completed", attrs...)
+	}
+	if h.metrics != nil {
+		h.metrics.RecordSuccess(ctx)
 	}
 
 	return nil, result, nil
