@@ -78,7 +78,7 @@ func (s *stubHTTPServer) Shutdown(context.Context) error {
 	return s.shutdownErr
 }
 
-func TestRunStartsServers(t *testing.T) {
+func TestRunHTTPModeStartsHTTPServer(t *testing.T) {
 	origNewMCP := newMCPServer
 	origRouter := newHTTPRouter
 	origHTTPServer := newHTTPServer
@@ -89,7 +89,7 @@ func TestRunStartsServers(t *testing.T) {
 	})
 
 	stubMCP := &stubMCPServer{runErr: context.Canceled}
-	var capturedHandler http.Handler
+	stubHTTP := &stubHTTPServer{listenErr: http.ErrServerClosed}
 
 	newMCPServer = func(opts mcpserver.Options) (mcpRunner, error) {
 		if opts.Service == nil {
@@ -98,20 +98,23 @@ func TestRunStartsServers(t *testing.T) {
 		return stubMCP, nil
 	}
 
+	var capturedHandler http.Handler
 	newHTTPRouter = func(logger *slog.Logger, checker domain.HealthChecker, handler http.Handler, enable bool) http.Handler {
+		if !enable {
+			t.Fatal("expected HTTP mode to enable MCP handler")
+		}
 		capturedHandler = handler
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {})
 	}
 
-	stubHTTP := &stubHTTPServer{listenErr: http.ErrServerClosed}
 	newHTTPServer = func(addr string, handler http.Handler) httpServer {
 		return stubHTTP
 	}
 
 	a := New(config.Config{
-		ArgoWatcherBaseURL:  "https://example.com",
-		HTTPListenAddr:      "127.0.0.1:0",
-		EnableHTTPTransport: true,
+		ArgoWatcherBaseURL: "https://example.com",
+		HTTPListenAddr:     "127.0.0.1:0",
+		TransportMode:      config.TransportModeHTTP,
 	}, slog.New(slog.NewJSONHandler(io.Discard, nil)))
 	a = a.WithClock(clock.FixedClock{At: time.Now()})
 
@@ -122,8 +125,8 @@ func TestRunStartsServers(t *testing.T) {
 		t.Fatalf("Run returned error: %v", err)
 	}
 
-	if !stubMCP.runCalled {
-		t.Fatal("expected RunStdio to be invoked")
+	if stubMCP.runCalled {
+		t.Fatal("expected stdio transport not to run in HTTP mode")
 	}
 	if !stubMCP.streamCalled {
 		t.Fatal("expected StreamableHandler to be invoked")
@@ -139,6 +142,38 @@ func TestRunStartsServers(t *testing.T) {
 	}
 }
 
+func TestRunStdioModeStartsOnlyStdio(t *testing.T) {
+	stubMCP := &stubMCPServer{runErr: context.Canceled}
+	stubHTTP := &stubHTTPServer{listenErr: http.ErrServerClosed}
+
+	setupRunTest(t, stubMCP, stubHTTP)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	a := New(config.Config{
+		ArgoWatcherBaseURL: "https://example.com",
+		HTTPListenAddr:     "127.0.0.1:0",
+		TransportMode:      config.TransportModeStdio,
+	}, slog.New(slog.NewJSONHandler(io.Discard, nil)))
+
+	if err := a.Run(ctx); err != nil {
+		t.Fatalf("Run returned error: %v", err)
+	}
+	if !stubMCP.runCalled {
+		t.Fatal("expected RunStdio to be invoked")
+	}
+	if stubMCP.streamCalled {
+		t.Fatal("expected StreamableHandler not to be invoked in stdio mode")
+	}
+	if stubHTTP.listenCalled {
+		t.Fatal("expected HTTP server not to listen in stdio mode")
+	}
+	if stubHTTP.shutdownCalled {
+		t.Fatal("expected HTTP server shutdown not to be called in stdio mode")
+	}
+}
+
 func TestRunPropagatesErrors(t *testing.T) {
 	origNewMCP := newMCPServer
 	t.Cleanup(func() { newMCPServer = origNewMCP })
@@ -147,7 +182,10 @@ func TestRunPropagatesErrors(t *testing.T) {
 	newMCPServer = func(opts mcpserver.Options) (mcpRunner, error) {
 		return nil, errBoom
 	}
-	a := New(config.Config{ArgoWatcherBaseURL: "https://example.com"}, slog.New(slog.NewJSONHandler(io.Discard, nil)))
+	a := New(config.Config{
+		ArgoWatcherBaseURL: "https://example.com",
+		TransportMode:      config.TransportModeStdio,
+	}, slog.New(slog.NewJSONHandler(io.Discard, nil)))
 
 	if err := a.Run(context.Background()); !errors.Is(err, errBoom) {
 		t.Fatalf("expected error %v, got %v", errBoom, err)
@@ -162,7 +200,7 @@ func TestRunPropagatesStdioError(t *testing.T) {
 
 	a := New(config.Config{
 		ArgoWatcherBaseURL:  "https://example.com",
-		EnableHTTPTransport: true,
+		TransportMode:       config.TransportModeStdio,
 	}, slog.New(slog.NewJSONHandler(io.Discard, nil)))
 
 	err := a.Run(context.Background())
@@ -177,7 +215,10 @@ func TestRunPropagatesHTTPListenError(t *testing.T) {
 
 	setupRunTest(t, stubMCP, stubHTTP)
 
-	a := New(config.Config{ArgoWatcherBaseURL: "https://example.com"}, slog.New(slog.NewJSONHandler(io.Discard, nil)))
+	a := New(config.Config{
+		ArgoWatcherBaseURL: "https://example.com",
+		TransportMode:      config.TransportModeHTTP,
+	}, slog.New(slog.NewJSONHandler(io.Discard, nil)))
 
 	err := a.Run(context.Background())
 	if err == nil || !strings.Contains(err.Error(), "listen failed") {
@@ -195,8 +236,8 @@ func TestRunPropagatesHTTPShutdownError(t *testing.T) {
 	setupRunTest(t, stubMCP, stubHTTP)
 
 	a := New(config.Config{
-		ArgoWatcherBaseURL:  "https://example.com",
-		EnableHTTPTransport: true,
+		ArgoWatcherBaseURL: "https://example.com",
+		TransportMode:      config.TransportModeHTTP,
 	}, slog.New(slog.NewJSONHandler(io.Discard, nil)))
 
 	ctx, cancel := context.WithCancel(context.Background())

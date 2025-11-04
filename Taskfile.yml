@@ -43,10 +43,10 @@ tasks:
       - GOMODCACHE={{.GOMODCACHE}} GOCACHE={{.GOCACHE}} go build -o {{.OUTPUT_DIR}}/{{.BINARY}} ./cmd/server
 
   run:
-    desc: "Run the MCP server (stdio + HTTP)"
+    desc: "Run the MCP server in HTTP mode"
     deps: [setup]
     cmds:
-      - GOMODCACHE={{.GOMODCACHE}} GOCACHE={{.GOCACHE}} go run ./cmd/server
+      - TRANSPORT_MODE=http GOMODCACHE={{.GOMODCACHE}} GOCACHE={{.GOCACHE}} go run ./cmd/server
 
   clean:
     desc: "Remove build artefacts"

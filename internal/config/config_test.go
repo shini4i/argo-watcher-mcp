@@ -2,6 +2,7 @@ package config
 
 import (
 	"os"
+	"strings"
 	"testing"
 	"time"
 )
@@ -12,7 +13,7 @@ func TestLoadSuccess(t *testing.T) {
 	t.Setenv("APP_VERSION", "1.2.3")
 	t.Setenv("HTTP_LISTEN_ADDR", "127.0.0.1:9000")
 	t.Setenv("REQUEST_TIMEOUT", "30s")
-	t.Setenv("ENABLE_HTTP_TRANSPORT", "false")
+	t.Setenv("TRANSPORT_MODE", "HTTP")
 
 	cfg, err := Load()
 	if err != nil {
@@ -34,8 +35,8 @@ func TestLoadSuccess(t *testing.T) {
 	if cfg.RequestTimeout != 30*time.Second {
 		t.Fatalf("expected RequestTimeout 30s, got %s", cfg.RequestTimeout)
 	}
-	if cfg.EnableHTTPTransport {
-		t.Fatalf("expected EnableHTTPTransport false, got true")
+	if cfg.TransportMode != TransportModeHTTP {
+		t.Fatalf("expected TransportMode http, got %s", cfg.TransportMode)
 	}
 }
 
@@ -44,7 +45,7 @@ func TestLoadMissingArgoWatcherURL(t *testing.T) {
 	t.Setenv("APP_VERSION", "1.2.3")
 	t.Setenv("HTTP_LISTEN_ADDR", "127.0.0.1:9000")
 	t.Setenv("REQUEST_TIMEOUT", "30s")
-	t.Setenv("ENABLE_HTTP_TRANSPORT", "true")
+	t.Setenv("TRANSPORT_MODE", "stdio")
 
 	prev, has := os.LookupEnv("ARGO_WATCHER_URL")
 	os.Unsetenv("ARGO_WATCHER_URL")
@@ -52,11 +53,24 @@ func TestLoadMissingArgoWatcherURL(t *testing.T) {
 		t.Cleanup(func() { os.Setenv("ARGO_WATCHER_URL", prev) })
 	}
 
-	cfg, err := Load()
-	if err != nil {
-		t.Fatalf("Load returned error: %v", err)
+	_, err := Load()
+	if err == nil {
+		t.Fatal("expected error when ARGO_WATCHER_URL is missing")
 	}
-	if cfg.ArgoWatcherBaseURL != "" {
-		t.Fatalf("expected empty ArgoWatcherBaseURL when ARGO_WATCHER_URL missing, got %q", cfg.ArgoWatcherBaseURL)
+	if !strings.Contains(err.Error(), "ARGO_WATCHER_URL") {
+		t.Fatalf("expected error to mention missing ARGO_WATCHER_URL, got %v", err)
+	}
+}
+
+func TestLoadInvalidTransportMode(t *testing.T) {
+	t.Setenv("ARGO_WATCHER_URL", "https://example.com")
+	t.Setenv("TRANSPORT_MODE", "gRPC")
+
+	_, err := Load()
+	if err == nil {
+		t.Fatal("expected error for invalid TRANSPORT_MODE")
+	}
+	if !strings.Contains(err.Error(), "invalid transport mode") {
+		t.Fatalf("expected invalid transport mode error, got %v", err)
 	}
 }

@@ -14,7 +14,7 @@ import (
 )
 
 type mockHTTPClient struct {
-	resp   *http.Response
+	resp    *http.Response
 	respErr error
 }
 
@@ -73,10 +73,10 @@ func TestListDeployments(t *testing.T) {
 		response := map[string]any{
 			"tasks": []any{
 				map[string]any{
-					"id":            "task-1",
-					"app":           "api",
-					"author":        "alice",
-					"project":       "proj",
+					"id":      "task-1",
+					"app":     "api",
+					"author":  "alice",
+					"project": "proj",
 					"images": []any{
 						map[string]any{"image": "repo", "tag": "v1"},
 						map[string]any{"image": "", "tag": ""},
@@ -122,6 +122,86 @@ func TestListDeployments(t *testing.T) {
 	case <-requested:
 	default:
 		t.Fatalf("request was not received")
+	}
+}
+
+func TestListDeploymentsNumericTimestamps(t *testing.T) {
+	base := time.Unix(1_700_000_000, 0).UTC()
+	updated := base.Add(5 * time.Minute)
+
+	testCases := []struct {
+		name         string
+		createdValue any
+		updatedValue any
+		wantCreated  time.Time
+		wantUpdated  time.Time
+	}{
+		{
+			name:         "seconds",
+			createdValue: base.Unix(),
+			updatedValue: updated.Unix(),
+			wantCreated:  time.Unix(base.Unix(), 0).UTC(),
+			wantUpdated:  time.Unix(updated.Unix(), 0).UTC(),
+		},
+		{
+			name:         "milliseconds",
+			createdValue: base.UnixMilli(),
+			updatedValue: updated.UnixMilli(),
+			wantCreated:  time.UnixMilli(base.UnixMilli()).UTC(),
+			wantUpdated:  time.UnixMilli(updated.UnixMilli()).UTC(),
+		},
+		{
+			name:         "fractionalSeconds",
+			createdValue: float64(base.Unix()) + 0.75,
+			updatedValue: float64(updated.Unix()) + 0.5,
+			wantCreated:  time.Unix(base.Unix(), int64(0.75*float64(time.Second))).UTC(),
+			wantUpdated:  time.Unix(updated.Unix(), int64(0.5*float64(time.Second))).UTC(),
+		},
+	}
+
+	for _, tc := range testCases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.WriteHeader(http.StatusOK)
+				resp := map[string]any{
+					"tasks": []any{
+						map[string]any{
+							"id":        "task-1",
+							"app":       "api",
+							"author":    "alice",
+							"project":   "proj",
+							"images":    []any{},
+							"status":    "Success",
+							"created":   tc.createdValue,
+							"updated":   tc.updatedValue,
+							"validated": true,
+						},
+					},
+				}
+				if err := json.NewEncoder(w).Encode(resp); err != nil {
+					t.Fatalf("encode response: %v", err)
+				}
+			}))
+			defer srv.Close()
+
+			client := New(srv.URL, srv.Client(), nil)
+			filter := domain.DeploymentFilter{FromTimestamp: base.Unix()}
+
+			deployments, err := client.ListDeployments(context.Background(), filter)
+			if err != nil {
+				t.Fatalf("expected no error, got %v", err)
+			}
+			if len(deployments) != 1 {
+				t.Fatalf("expected one deployment, got %d", len(deployments))
+			}
+			if !deployments[0].Created.Equal(tc.wantCreated) {
+				t.Fatalf("unexpected created timestamp: got %s, want %s", deployments[0].Created, tc.wantCreated)
+			}
+			if !deployments[0].Updated.Equal(tc.wantUpdated) {
+				t.Fatalf("unexpected updated timestamp: got %s, want %s", deployments[0].Updated, tc.wantUpdated)
+			}
+		})
 	}
 }
 

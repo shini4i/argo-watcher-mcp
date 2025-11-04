@@ -3,6 +3,7 @@ package mcpserver
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"time"
 
@@ -14,9 +15,10 @@ import (
 
 // Server wraps an MCP server instance and its tool registrations.
 type Server struct {
-	impl  *mcp.Server
-	clock clock.Clock
-	svc   domain.DeploymentService
+	impl   *mcp.Server
+	clock  clock.Clock
+	svc    domain.DeploymentService
+	logger *slog.Logger
 }
 
 // Options configure the server.
@@ -30,6 +32,8 @@ type Options struct {
 	// Clock supplies time readings for defaulting request ranges. When unset the
 	// system clock is used.
 	Clock clock.Clock
+	// Logger records tool activity. When nil, slog.Default is used.
+	Logger *slog.Logger
 }
 
 // New constructs an MCP server with all tools registered.
@@ -37,14 +41,22 @@ func New(opts Options) (*Server, error) {
 	if opts.Service == nil {
 		return nil, fmt.Errorf("deployment service is required")
 	}
+
+	logger := opts.Logger
+	if logger == nil {
+		logger = slog.Default()
+	}
+	logger = logger.With("component", "mcpserver")
+
 	srv := mcp.NewServer(&mcp.Implementation{
 		Name:    opts.Name,
 		Version: opts.Version,
 	}, nil)
 
 	handler := &getDeploymentsHandler{
-		clock: opts.Clock,
-		svc:   opts.Service,
+		clock:  opts.Clock,
+		svc:    opts.Service,
+		logger: logger.With("tool", "get_deployments"),
 	}
 
 	mcp.AddTool(srv, &mcp.Tool{
@@ -53,9 +65,10 @@ func New(opts Options) (*Server, error) {
 	}, handler.Handle)
 
 	return &Server{
-		impl:  srv,
-		clock: handler.clock,
-		svc:   opts.Service,
+		impl:   srv,
+		clock:  handler.clock,
+		svc:    opts.Service,
+		logger: logger,
 	}, nil
 }
 
@@ -94,11 +107,12 @@ type getDeploymentsInput struct {
 }
 
 type getDeploymentsHandler struct {
-	clock clock.Clock
-	svc   domain.DeploymentService
+	clock  clock.Clock
+	svc    domain.DeploymentService
+	logger *slog.Logger
 }
 
-// Handle executes the get_deployments tool logic.
+// Handle executes the get_deployments tool logic and logs the processed request.
 func (h *getDeploymentsHandler) Handle(ctx context.Context, _ *mcp.CallToolRequest, input getDeploymentsInput) (*mcp.CallToolResult, any, error) {
 	now := h.nowUnix()
 
@@ -132,9 +146,22 @@ func (h *getDeploymentsHandler) Handle(ctx context.Context, _ *mcp.CallToolReque
 		ToTimestamp:   *to,
 	}
 
+	if h.logger != nil {
+		h.logger.LogAttrs(ctx, slog.LevelInfo, "get_deployments request", h.requestAttrs(filter)...)
+	}
+
 	result, err := h.svc.ListDeployments(ctx, filter)
 	if err != nil {
+		if h.logger != nil {
+			attrs := append(h.requestAttrs(filter), slog.Any("error", err))
+			h.logger.LogAttrs(ctx, slog.LevelError, "get_deployments failed", attrs...)
+		}
 		return nil, nil, err
+	}
+
+	if h.logger != nil {
+		attrs := append(h.requestAttrs(filter), slog.Int("count", len(result)))
+		h.logger.LogAttrs(ctx, slog.LevelInfo, "get_deployments completed", attrs...)
 	}
 
 	return nil, result, nil
@@ -147,6 +174,17 @@ func (h *getDeploymentsHandler) nowUnix() int64 {
 	default:
 		return time.Now().UTC().Unix()
 	}
+}
+
+func (h *getDeploymentsHandler) requestAttrs(filter domain.DeploymentFilter) []slog.Attr {
+	attrs := []slog.Attr{
+		slog.Int64("from_timestamp", filter.FromTimestamp),
+		slog.Int64("to_timestamp", filter.ToTimestamp),
+	}
+	if filter.App != nil {
+		attrs = append(attrs, slog.String("app", *filter.App))
+	}
+	return attrs
 }
 
 func ptrOf[T any](v T) *T {

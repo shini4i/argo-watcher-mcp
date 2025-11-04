@@ -5,15 +5,44 @@ import (
 	"encoding/json"
 	"log/slog"
 	"net/http"
+	"time"
 
 	"github.com/go-chi/chi/v5"
+	"github.com/go-chi/chi/v5/middleware"
 
 	"github.com/shini4i/argo-watcher-mcp/internal/domain"
 )
 
-// NewRouter wires health endpoints and optionally the MCP handler.
+// NewRouter wires health endpoints, applies basic request logging, and optionally mounts the MCP handler.
 func NewRouter(logger *slog.Logger, checker domain.HealthChecker, mcpHandler http.Handler, enableMCP bool) http.Handler {
 	r := chi.NewRouter()
+
+	requestLogger := logger
+	if requestLogger == nil {
+		requestLogger = slog.Default()
+	}
+	requestLogger = requestLogger.With(
+		slog.String("component", "httpserver"),
+		slog.String("transport", "http"),
+	)
+
+	r.Use(func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+			start := time.Now()
+			ww := middleware.NewWrapResponseWriter(w, req.ProtoMajor)
+			next.ServeHTTP(ww, req)
+
+			duration := time.Since(start)
+			requestLogger.Info("http request completed",
+				slog.String("method", req.Method),
+				slog.String("path", req.URL.Path),
+				slog.Int("status", ww.Status()),
+				slog.String("duration", duration.String()),
+				slog.Float64("duration_ms", float64(duration)/float64(time.Millisecond)),
+				slog.String("remote_addr", req.RemoteAddr),
+			)
+		})
+	})
 
 	r.Get("/healthz", func(w http.ResponseWriter, r *http.Request) {
 		writeJSON(logger, w, http.StatusOK, map[string]string{"status": "up"})

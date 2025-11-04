@@ -71,7 +71,7 @@ func (a *Application) WithClock(c clock.Clock) *Application {
 // Run starts the MCP transports and HTTP server until the context is cancelled.
 func (a *Application) Run(ctx context.Context) error {
 	a.logger.Info("starting argo-watcher-mcp server",
-		slog.Bool("http_transport_enabled", a.cfg.EnableHTTPTransport),
+		slog.String("transport_mode", a.cfg.TransportMode),
 		slog.String("http_addr", a.cfg.HTTPListenAddr),
 	)
 
@@ -87,42 +87,44 @@ func (a *Application) Run(ctx context.Context) error {
 		Version: a.cfg.Version,
 		Service: argoClient,
 		Clock:   a.clock,
+		Logger:  a.logger,
 	})
 	if err != nil {
 		return fmt.Errorf("create mcp server: %w", err)
 	}
 
-	var handler http.Handler
-	if a.cfg.EnableHTTPTransport {
-		handler = mcpSrv.StreamableHandler()
-	}
-
-	router := newHTTPRouter(a.logger, argoClient, handler, a.cfg.EnableHTTPTransport)
-	httpSrv := newHTTPServer(a.cfg.HTTPListenAddr, router)
-
 	group, groupCtx := errgroup.WithContext(ctx)
 
-	group.Go(func() error {
-		if err := mcpSrv.RunStdio(groupCtx); err != nil && !errors.Is(err, context.Canceled) {
-			return fmt.Errorf("stdio transport: %w", err)
-		}
-		return nil
-	})
+	switch a.cfg.TransportMode {
+	case config.TransportModeStdio:
+		group.Go(func() error {
+			if err := mcpSrv.RunStdio(groupCtx); err != nil && !errors.Is(err, context.Canceled) {
+				return fmt.Errorf("stdio transport: %w", err)
+			}
+			return nil
+		})
+	case config.TransportModeHTTP:
+		handler := mcpSrv.StreamableHandler()
+		router := newHTTPRouter(a.logger, argoClient, handler, true)
+		httpSrv := newHTTPServer(a.cfg.HTTPListenAddr, router)
 
-	group.Go(func() error {
-		err := httpSrv.ListenAndServe()
-		if err != nil && !errors.Is(err, http.ErrServerClosed) {
-			return fmt.Errorf("http server: %w", err)
-		}
-		return nil
-	})
+		group.Go(func() error {
+			err := httpSrv.ListenAndServe()
+			if err != nil && !errors.Is(err, http.ErrServerClosed) {
+				return fmt.Errorf("http server: %w", err)
+			}
+			return nil
+		})
 
-	group.Go(func() error {
-		<-groupCtx.Done()
-		shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-		defer cancel()
-		return httpSrv.Shutdown(shutdownCtx)
-	})
+		group.Go(func() error {
+			<-groupCtx.Done()
+			shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer cancel()
+			return httpSrv.Shutdown(shutdownCtx)
+		})
+	default:
+		return fmt.Errorf("unsupported transport mode: %s", a.cfg.TransportMode)
+	}
 
 	if err := group.Wait(); err != nil {
 		return err

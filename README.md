@@ -57,8 +57,8 @@ A simple service that exposes an [argo-watcher](https://github.com/shini4i/argo-
 
    The process exposes:
 
-   - An MCP streamable HTTP endpoint on `HTTP_LISTEN_ADDR` (default `:8000`).
-   - stdio transport on the launched process stdin/stdout (usable by MCP-compatible CLIs).
+   - Choose the transport via the `TRANSPORT_MODE` environment variable (`stdio` or `http`).
+   - In `stdio` mode the server communicates over stdin/stdout; in `http` mode it serves a streamable endpoint on `HTTP_LISTEN_ADDR` (default `:8000`).
 
 4. **(Optional) Run via Docker**
 
@@ -76,7 +76,7 @@ A simple service that exposes an [argo-watcher](https://github.com/shini4i/argo-
 |----------|---------|-------------|
 | `ARGO_WATCHER_URL` | _none_ (required) | Base URL of the upstream argo-watcher service. |
 | `HTTP_LISTEN_ADDR` | `:8000` | Address for the HTTP/SSE transport. |
-| `ENABLE_HTTP_TRANSPORT` | `true` | Toggle the HTTP transport while keeping stdio available. |
+| `TRANSPORT_MODE` | `stdio` | Selects transport: `stdio` for CLI usage or `http` for SSE over HTTP. |
 | `REQUEST_TIMEOUT` | `15s` | HTTP timeout for downstream argo-watcher requests. |
 | `APP_NAME` | `argo-watcher-mcp` | Metadata surfaced via MCP implementation info. |
 | `APP_VERSION` | `0.0.1-dev` | Version surfaced via MCP implementation info. |
@@ -90,7 +90,7 @@ Common tasks are exposed via the included `Taskfile`:
 - `task fmt` – format the Go sources.
 - `task tidy` – tidy module dependencies.
 - `task vet` – execute `go vet ./...`.
-- `task run` – start the server locally with stdio + HTTP transports.
+- `task run` – start the server locally using the default transport mode (`stdio` unless `TRANSPORT_MODE` is set).
 
 Module and build caches live inside `.cache/` and are ignored by git.
 

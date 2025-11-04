@@ -1,9 +1,14 @@
 package mcpserver
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
+	"net/http"
+	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -148,5 +153,93 @@ func TestGetDeploymentsHandlerDaysHistoryOverride(t *testing.T) {
 	}
 	if fakeService.capturedFilter.ToTimestamp != wantTo {
 		t.Fatalf("expected to timestamp %d, got %d", wantTo, fakeService.capturedFilter.ToTimestamp)
+	}
+}
+
+func TestNewRequiresService(t *testing.T) {
+	if _, err := New(Options{}); err == nil {
+		t.Fatal("expected error when Service is nil")
+	}
+}
+
+func TestServerRunStdioRespectsContext(t *testing.T) {
+	srv, err := New(Options{
+		Service: &stubDeploymentService{},
+	})
+	if err != nil {
+		t.Fatalf("unexpected error creating server: %v", err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	if err := srv.RunStdio(ctx); !errors.Is(err, context.Canceled) {
+		t.Fatalf("expected context.Canceled, got %v", err)
+	}
+}
+
+func TestStreamableHandlerServesRequests(t *testing.T) {
+	srv, err := New(Options{
+		Service: &stubDeploymentService{
+			result: []domain.Deployment{},
+		},
+		Clock: clock.FixedClock{At: time.Unix(0, 0)},
+	})
+	if err != nil {
+		t.Fatalf("unexpected error creating server: %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	recorder := httptest.NewRecorder()
+
+	handler := srv.StreamableHandler()
+	handler.ServeHTTP(recorder, req)
+
+	if recorder.Result().StatusCode == 0 {
+		t.Fatal("expected StreamableHandler to write a response")
+	}
+}
+
+func TestGetDeploymentsHandlerNowUnixNilClock(t *testing.T) {
+	handler := &getDeploymentsHandler{}
+
+	got := handler.nowUnix()
+	if got <= 0 {
+		t.Fatalf("expected positive unix timestamp, got %d", got)
+	}
+}
+
+func TestGetDeploymentsHandlerLogsProcessing(t *testing.T) {
+	var buf bytes.Buffer
+	logger := slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelInfo}))
+
+	fakeService := &stubDeploymentService{
+		result: []domain.Deployment{{ID: "task-1"}},
+	}
+	app := "api"
+	handler := &getDeploymentsHandler{
+		svc: fakeService,
+		logger: logger.With(
+			slog.String("component", "mcpserver"),
+			slog.String("tool", "get_deployments"),
+		),
+	}
+
+	ctx := context.Background()
+	if _, _, err := handler.Handle(ctx, nil, getDeploymentsInput{
+		App: &app,
+	}); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	logs := buf.String()
+	if !strings.Contains(logs, "get_deployments request") {
+		t.Fatalf("expected request log entry, got %q", logs)
+	}
+	if !strings.Contains(logs, "get_deployments completed") {
+		t.Fatalf("expected completion log entry, got %q", logs)
+	}
+	if !strings.Contains(logs, "tool=get_deployments") {
+		t.Fatalf("expected tool attribute in logs, got %q", logs)
 	}
 }

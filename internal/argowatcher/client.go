@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"math"
 	"net/http"
 	"net/url"
 	"strings"
@@ -128,8 +129,8 @@ type taskPayload struct {
 	Project      string          `json:"project"`
 	Images       []imagePayload  `json:"images"`
 	Status       string          `json:"status"`
-	Created      time.Time       `json:"created"`
-	Updated      time.Time       `json:"updated"`
+	Created      jsonTimestamp   `json:"created"`
+	Updated      jsonTimestamp   `json:"updated"`
 	StatusReason *string         `json:"status_reason"`
 	Validated    bool            `json:"validated"`
 	Timeout      *int            `json:"timeout"`
@@ -167,10 +168,74 @@ func (p taskPayload) toDomain() (domain.Deployment, error) {
 		Project:      p.Project,
 		Images:       images,
 		Status:       p.Status,
-		Created:      p.Created,
-		Updated:      p.Updated,
+		Created:      p.Created.Time,
+		Updated:      p.Updated.Time,
 		StatusReason: p.StatusReason,
 		Validated:    p.Validated,
 		Timeout:      p.Timeout,
 	}, nil
+}
+
+// jsonTimestamp decodes timestamp fields that can be represented as RFC3339 strings or Unix epoch numbers.
+type jsonTimestamp struct {
+	time.Time
+}
+
+// UnmarshalJSON accepts RFC3339 strings, Unix seconds, or Unix millisecond/microsecond/nanosecond integers.
+func (t *jsonTimestamp) UnmarshalJSON(data []byte) error {
+	token := strings.TrimSpace(string(data))
+	if token == "" || token == "null" {
+		t.Time = time.Time{}
+		return nil
+	}
+
+	if strings.HasPrefix(token, "\"") {
+		var ts string
+		if err := json.Unmarshal(data, &ts); err != nil {
+			return fmt.Errorf("unmarshal timestamp string: %w", err)
+		}
+		if ts == "" {
+			t.Time = time.Time{}
+			return nil
+		}
+		parsed, err := time.Parse(time.RFC3339, ts)
+		if err != nil {
+			return fmt.Errorf("parse RFC3339 timestamp %q: %w", ts, err)
+		}
+		t.Time = parsed
+		return nil
+	}
+
+	var number json.Number
+	if err := json.Unmarshal(data, &number); err != nil {
+		return fmt.Errorf("unmarshal numeric timestamp: %w", err)
+	}
+
+	// Prefer preserving fractional seconds when present.
+	if strings.Contains(number.String(), ".") {
+		value, err := number.Float64()
+		if err != nil {
+			return fmt.Errorf("convert fractional timestamp %q: %w", number.String(), err)
+		}
+		secs, frac := math.Modf(value)
+		t.Time = time.Unix(int64(secs), int64(frac*float64(time.Second))).UTC()
+		return nil
+	}
+
+	value, err := number.Int64()
+	if err != nil {
+		return fmt.Errorf("convert integral timestamp %q: %w", number.String(), err)
+	}
+
+	switch {
+	case value > 1_000_000_000_000_000_000: // nanoseconds
+		t.Time = time.Unix(0, value).UTC()
+	case value > 1_000_000_000_000_000: // microseconds
+		t.Time = time.Unix(0, value*int64(time.Microsecond)).UTC()
+	case value > 1_000_000_000_000: // milliseconds
+		t.Time = time.Unix(0, value*int64(time.Millisecond)).UTC()
+	default: // seconds
+		t.Time = time.Unix(value, 0).UTC()
+	}
+	return nil
 }
