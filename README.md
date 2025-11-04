@@ -4,9 +4,10 @@
 
 A simple service that exposes an [argo-watcher](https://github.com/shini4i/argo-watcher) instance as a set of tools via the Model Context Protocol (MCP), allowing AI agents and other clients to query deployment history.
 
-![GitHub Actions](https://img.shields.io/github/actions/workflow/status/shini4i/argo-watcher-mcp/run-tests.yml?branch=main&style=plastic)
-![codecov](https://img.shields.io/codecov/c/github/shini4i/argo-watcher-mcp?style=plastic&token=E61B6OYPFX)
+![GitHub Actions](https://img.shields.io/github/actions/workflow/status/shini4i/argo-watcher-mcp/go-tests.yml?branch=main&style=plastic)
+![GitHub go.mod Go version](https://img.shields.io/github/go-mod/go-version/shini4i/argo-watcher-mcp)
 ![GitHub release (latest by date)](https://img.shields.io/github/v/release/shini4i/argo-watcher-mcp?style=plastic)
+![codecov](https://img.shields.io/codecov/c/github/shini4i/argo-watcher-mcp?style=plastic&token=E61B6OYPFX)
 ![license](https://img.shields.io/github/license/shini4i/argo-watcher-mcp?style=plastic)
 
 </div>
