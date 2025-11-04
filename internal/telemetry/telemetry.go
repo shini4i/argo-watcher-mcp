@@ -2,6 +2,7 @@ package telemetry
 
 import (
 	"context"
+	"crypto/tls"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -20,10 +21,13 @@ import (
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 	semconv "go.opentelemetry.io/otel/semconv/v1.26.0"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/credentials/insecure"
 
 	"github.com/shini4i/argo-watcher-mcp/internal/config"
 )
+
+var dialOTLP = grpc.DialContext
 
 // Provider owns the telemetry exporters and their lifecycle hooks.
 type Provider struct {
@@ -54,7 +58,6 @@ func NewProvider(ctx context.Context, cfg config.Config, logger *slog.Logger) (*
 	}
 
 	res, err := resource.New(ctx,
-		resource.WithSchemaURL(semconv.SchemaURL),
 		resource.WithFromEnv(),
 		resource.WithProcess(),
 		resource.WithTelemetrySDK(),
@@ -97,7 +100,7 @@ func NewProvider(ctx context.Context, cfg config.Config, logger *slog.Logger) (*
 
 	endpoint := strings.TrimSpace(cfg.OtelExporterOtlpEndpoint)
 	if endpoint != "" {
-		conn, err := grpc.DialContext(ctx, endpoint, grpc.WithTransportCredentials(insecure.NewCredentials()))
+		conn, err := dialOTLP(ctx, endpoint, grpc.WithTransportCredentials(otlpTransportCredentials(cfg)))
 		if err != nil {
 			return nil, fmt.Errorf("dial otlp endpoint %q: %w", endpoint, err)
 		}
@@ -147,4 +150,13 @@ func NewProvider(ctx context.Context, cfg config.Config, logger *slog.Logger) (*
 			return runShutdowns(ctx)
 		},
 	}, nil
+}
+
+// otlpTransportCredentials chooses the gRPC transport credentials used when connecting to the OTLP collector.
+func otlpTransportCredentials(cfg config.Config) credentials.TransportCredentials {
+	if cfg.OtelExporterOtlpInsecure {
+		return insecure.NewCredentials()
+	}
+
+	return credentials.NewTLS(&tls.Config{})
 }

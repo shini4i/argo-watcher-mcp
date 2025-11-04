@@ -35,6 +35,7 @@ func TestLoadSuccess(t *testing.T) {
 				OtelEnabled:              true,
 				OtelServiceName:          "",
 				OtelExporterOtlpEndpoint: "",
+				OtelExporterOtlpInsecure: false,
 			},
 		},
 		{
@@ -43,6 +44,7 @@ func TestLoadSuccess(t *testing.T) {
 				"OTEL_ENABLED":                "false",
 				"OTEL_SERVICE_NAME":           "telemetry-test",
 				"OTEL_EXPORTER_OTLP_ENDPOINT": "otel-collector:4317",
+				"OTEL_EXPORTER_OTLP_INSECURE": "true",
 			},
 			expected: Config{
 				Name:                     "test-app",
@@ -54,6 +56,7 @@ func TestLoadSuccess(t *testing.T) {
 				OtelEnabled:              false,
 				OtelServiceName:          "telemetry-test",
 				OtelExporterOtlpEndpoint: "otel-collector:4317",
+				OtelExporterOtlpInsecure: true,
 			},
 		},
 	}

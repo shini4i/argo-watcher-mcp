@@ -9,6 +9,8 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+
+	"github.com/prometheus/client_golang/prometheus/promhttp"
 )
 
 type stubChecker struct {
@@ -119,6 +121,31 @@ func TestRouterWithoutMCPHandler(t *testing.T) {
 	body, _ := io.ReadAll(resp.Body)
 	if !strings.Contains(string(body), `"error":"not found"`) {
 		t.Fatalf("unexpected body: %s", string(body))
+	}
+}
+
+func TestMetricsEndpointWithPrometheusHandler(t *testing.T) {
+	promHandler := promhttp.Handler()
+	router := NewRouter(nil, &stubChecker{}, nil, false, promHandler)
+	server := httptest.NewServer(router)
+	defer server.Close()
+
+	resp, err := http.Get(server.URL + "/metrics")
+	if err != nil {
+		t.Fatalf("metrics request failed: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("expected status 200, got %d", resp.StatusCode)
+	}
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatalf("failed reading metrics body: %v", err)
+	}
+	if !strings.Contains(string(body), "# HELP") {
+		t.Fatalf("expected Prometheus exposition format, got: %s", string(body))
 	}
 }
 

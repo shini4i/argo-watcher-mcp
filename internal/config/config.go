@@ -44,6 +44,9 @@ type Config struct {
 
 	// OtelExporterOtlpEndpoint controls the OTLP gRPC endpoint used for traces and metrics.
 	OtelExporterOtlpEndpoint string `env:"OTEL_EXPORTER_OTLP_ENDPOINT"`
+
+	// OtelExporterOtlpInsecure allows opting into plaintext OTLP connections. Defaults to secure transport.
+	OtelExporterOtlpInsecure bool `env:"OTEL_EXPORTER_OTLP_INSECURE" envDefault:"false"`
 }
 
 // Load parses environment variables into Config while applying defaults.
