@@ -1,0 +1,43 @@
+name: Go Tests
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - '**/*.go'
+  pull_request:
+    types: [opened, synchronize, reopened]
+    paths:
+      - '**/*.go'
+
+permissions:
+  contents: read
+
+jobs:
+  unit-tests:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
+
+      - name: Set up Go
+        uses: actions/setup-go@44694675825211faa026b3c33043df3e48a5fa00 # v6.0.0
+        with:
+          go-version: "1.25"
+          cache: true
+
+      - name: Run unit tests with coverage
+        run: go test -covermode=atomic -coverprofile=coverage.out ./...
+
+      - name: Show coverage summary
+        run: go tool cover -func=coverage.out
+
+      - name: Upload coverage to Codecov
+        uses: codecov/codecov-action@af09b5e394c93991b95a5e7646aeb90c1917f78f # v5.5.1
+        with:
+          files: coverage.out
+          token: ${{ secrets.CODECOV_TOKEN }}
+          flags: unit-tests
+          fail_ci_if_error: true

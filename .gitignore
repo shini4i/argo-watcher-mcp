@@ -4,6 +4,9 @@
 .task/
 
 .env
-.envrc
+
+.cache/
+bin/
+argo-watcher-mcp
 
 **/__pycache__/
