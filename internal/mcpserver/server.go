@@ -11,6 +11,7 @@ import (
 
 	"github.com/shini4i/argo-watcher-mcp/internal/clock"
 	"github.com/shini4i/argo-watcher-mcp/internal/domain"
+	"github.com/shini4i/argo-watcher-mcp/internal/httpserver"
 )
 
 // Server wraps an MCP server instance and its tool registrations.
@@ -114,6 +115,7 @@ type getDeploymentsHandler struct {
 
 // Handle executes the get_deployments tool logic and logs the processed request.
 func (h *getDeploymentsHandler) Handle(ctx context.Context, _ *mcp.CallToolRequest, input getDeploymentsInput) (*mcp.CallToolResult, any, error) {
+	logger := loggerFromContext(ctx, h.logger)
 	now := h.nowUnix()
 
 	to := input.ToUnix
@@ -146,22 +148,22 @@ func (h *getDeploymentsHandler) Handle(ctx context.Context, _ *mcp.CallToolReque
 		ToTimestamp:   *to,
 	}
 
-	if h.logger != nil {
-		h.logger.LogAttrs(ctx, slog.LevelInfo, "get_deployments request", h.requestAttrs(filter)...)
+	if logger != nil {
+		logger.LogAttrs(ctx, slog.LevelInfo, "get_deployments request", h.requestAttrs(filter)...)
 	}
 
 	result, err := h.svc.ListDeployments(ctx, filter)
 	if err != nil {
-		if h.logger != nil {
+		if logger != nil {
 			attrs := append(h.requestAttrs(filter), slog.Any("error", err))
-			h.logger.LogAttrs(ctx, slog.LevelError, "get_deployments failed", attrs...)
+			logger.LogAttrs(ctx, slog.LevelError, "get_deployments failed", attrs...)
 		}
 		return nil, nil, err
 	}
 
-	if h.logger != nil {
+	if logger != nil {
 		attrs := append(h.requestAttrs(filter), slog.Int("count", len(result)))
-		h.logger.LogAttrs(ctx, slog.LevelInfo, "get_deployments completed", attrs...)
+		logger.LogAttrs(ctx, slog.LevelInfo, "get_deployments completed", attrs...)
 	}
 
 	return nil, result, nil
@@ -185,6 +187,10 @@ func (h *getDeploymentsHandler) requestAttrs(filter domain.DeploymentFilter) []s
 		attrs = append(attrs, slog.String("app", *filter.App))
 	}
 	return attrs
+}
+
+func loggerFromContext(ctx context.Context, fallback *slog.Logger) *slog.Logger {
+	return httpserver.LoggerFromContext(ctx, fallback)
 }
 
 func ptrOf[T any](v T) *T {

@@ -2,6 +2,7 @@ package httpserver
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"log/slog"
 	"net/http"
@@ -9,12 +10,18 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
+	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
+	"go.opentelemetry.io/otel/trace"
 
 	"github.com/shini4i/argo-watcher-mcp/internal/domain"
 )
 
+type contextKey string
+
+const loggerKey contextKey = "logger"
+
 // NewRouter wires health endpoints, applies basic request logging, and optionally mounts the MCP handler.
-func NewRouter(logger *slog.Logger, checker domain.HealthChecker, mcpHandler http.Handler, enableMCP bool) http.Handler {
+func NewRouter(logger *slog.Logger, checker domain.HealthChecker, mcpHandler http.Handler, enableMCP bool, promHandler http.Handler) http.Handler {
 	r := chi.NewRouter()
 
 	requestLogger := logger
@@ -27,13 +34,29 @@ func NewRouter(logger *slog.Logger, checker domain.HealthChecker, mcpHandler htt
 	)
 
 	r.Use(func(next http.Handler) http.Handler {
+		return otelhttp.NewHandler(next, "http.server")
+	})
+
+	r.Use(func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
 			start := time.Now()
 			ww := middleware.NewWrapResponseWriter(w, req.ProtoMajor)
+
+			reqLogger := requestLogger
+			spanCtx := trace.SpanFromContext(req.Context()).SpanContext()
+			if spanCtx.IsValid() {
+				reqLogger = reqLogger.With(
+					slog.String("trace_id", spanCtx.TraceID().String()),
+					slog.String("span_id", spanCtx.SpanID().String()),
+				)
+			}
+
+			req = req.WithContext(context.WithValue(req.Context(), loggerKey, reqLogger))
+
 			next.ServeHTTP(ww, req)
 
 			duration := time.Since(start)
-			requestLogger.Info("http request completed",
+			reqLogger.Info("http request completed",
 				slog.String("method", req.Method),
 				slog.String("path", req.URL.Path),
 				slog.Int("status", ww.Status()),
@@ -45,12 +68,12 @@ func NewRouter(logger *slog.Logger, checker domain.HealthChecker, mcpHandler htt
 	})
 
 	r.Get("/healthz", func(w http.ResponseWriter, r *http.Request) {
-		writeJSON(logger, w, http.StatusOK, map[string]string{"status": "up"})
+		writeJSON(r.Context(), requestLogger, w, http.StatusOK, map[string]string{"status": "up"})
 	})
 
 	r.Get("/readyz", func(w http.ResponseWriter, r *http.Request) {
 		if checker == nil {
-			writeJSON(logger, w, http.StatusServiceUnavailable, map[string]string{
+			writeJSON(r.Context(), requestLogger, w, http.StatusServiceUnavailable, map[string]string{
 				"status": "unknown",
 				"error":  "no health checker configured",
 			})
@@ -58,31 +81,33 @@ func NewRouter(logger *slog.Logger, checker domain.HealthChecker, mcpHandler htt
 		}
 
 		if err := checker.Check(r.Context()); err != nil {
-			writeJSON(logger, w, http.StatusServiceUnavailable, map[string]string{
+			writeJSON(r.Context(), requestLogger, w, http.StatusServiceUnavailable, map[string]string{
 				"status": "not_ready",
 				"error":  err.Error(),
 			})
 			return
 		}
 
-		writeJSON(logger, w, http.StatusOK, map[string]string{"status": "ready"})
+		writeJSON(r.Context(), requestLogger, w, http.StatusOK, map[string]string{"status": "ready"})
 	})
+
+	if promHandler != nil {
+		r.Handle("/metrics", promHandler)
+	}
 
 	if enableMCP && mcpHandler != nil {
 		r.Mount("/", mcpHandler)
 	} else {
 		r.NotFound(func(w http.ResponseWriter, r *http.Request) {
-			writeJSON(logger, w, http.StatusNotFound, map[string]string{"error": "not found"})
+			writeJSON(r.Context(), requestLogger, w, http.StatusNotFound, map[string]string{"error": "not found"})
 		})
 	}
 
 	return r
 }
 
-func writeJSON(logger *slog.Logger, w http.ResponseWriter, status int, payload any) {
-	if logger == nil {
-		logger = slog.Default()
-	}
+func writeJSON(ctx context.Context, fallback *slog.Logger, w http.ResponseWriter, status int, payload any) {
+	logger := LoggerFromContext(ctx, fallback)
 
 	var buf bytes.Buffer
 	if err := json.NewEncoder(&buf).Encode(payload); err != nil {
@@ -95,4 +120,19 @@ func writeJSON(logger *slog.Logger, w http.ResponseWriter, status int, payload a
 	if _, err := buf.WriteTo(w); err != nil {
 		logger.Error("httpserver: writeJSON write failure", slog.Any("error", err))
 	}
+}
+
+// LoggerFromContext returns a request-scoped logger stored in ctx or falls back to the provided logger.
+func LoggerFromContext(ctx context.Context, fallback *slog.Logger) *slog.Logger {
+	if ctx != nil {
+		if logger, ok := ctx.Value(loggerKey).(*slog.Logger); ok && logger != nil {
+			return logger
+		}
+	}
+
+	if fallback != nil {
+		return fallback
+	}
+
+	return slog.Default()
 }

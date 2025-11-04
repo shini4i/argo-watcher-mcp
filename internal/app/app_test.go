@@ -99,11 +99,13 @@ func TestRunHTTPModeStartsHTTPServer(t *testing.T) {
 	}
 
 	var capturedHandler http.Handler
-	newHTTPRouter = func(logger *slog.Logger, checker domain.HealthChecker, handler http.Handler, enable bool) http.Handler {
+	var capturedPromHandler http.Handler
+	newHTTPRouter = func(logger *slog.Logger, checker domain.HealthChecker, handler http.Handler, enable bool, promHandler http.Handler) http.Handler {
 		if !enable {
 			t.Fatal("expected HTTP mode to enable MCP handler")
 		}
 		capturedHandler = handler
+		capturedPromHandler = promHandler
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {})
 	}
 
@@ -133,6 +135,9 @@ func TestRunHTTPModeStartsHTTPServer(t *testing.T) {
 	}
 	if capturedHandler == nil {
 		t.Fatal("expected handler to be passed to router")
+	}
+	if capturedPromHandler == nil {
+		t.Fatal("expected prometheus handler to be passed to router")
 	}
 	if !stubHTTP.listenCalled {
 		t.Fatal("expected HTTP server to listen")
@@ -290,7 +295,7 @@ func setupRunTest(t *testing.T, stubMCP *stubMCPServer, stubHTTP *stubHTTPServer
 		return stubMCP, nil
 	}
 
-	newHTTPRouter = func(logger *slog.Logger, checker domain.HealthChecker, handler http.Handler, enable bool) http.Handler {
+	newHTTPRouter = func(logger *slog.Logger, checker domain.HealthChecker, handler http.Handler, enable bool, promHandler http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {})
 	}
 

@@ -78,6 +78,9 @@ A simple service that exposes an [argo-watcher](https://github.com/shini4i/argo-
 | `HTTP_LISTEN_ADDR` | `:8000` | Address for the HTTP/SSE transport. |
 | `TRANSPORT_MODE` | `stdio` | Selects transport: `stdio` for CLI usage or `http` for SSE over HTTP. |
 | `REQUEST_TIMEOUT` | `15s` | HTTP timeout for downstream argo-watcher requests. |
+| `OTEL_ENABLED` | `true` | Enables OpenTelemetry instrumentation; set to `false` to disable all telemetry exports. |
+| `OTEL_SERVICE_NAME` | inherits `APP_NAME` | Overrides the OpenTelemetry `service.name` resource attribute reported by the server. |
+| `OTEL_EXPORTER_OTLP_ENDPOINT` | _none_ | Optional OTLP gRPC endpoint (`host:port`) used for exporting metrics and traces. |
 | `APP_NAME` | `argo-watcher-mcp` | Metadata surfaced via MCP implementation info. |
 | `APP_VERSION` | `0.0.1-dev` | Version surfaced via MCP implementation info. |
 

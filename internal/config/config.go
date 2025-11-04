@@ -35,6 +35,15 @@ type Config struct {
 	// TransportMode selects which transport the MCP server exposes.
 	// Supported values: "stdio" and "http".
 	TransportMode string `env:"TRANSPORT_MODE" envDefault:"stdio"`
+
+	// OtelEnabled controls whether telemetry instrumentation is initialized.
+	OtelEnabled bool `env:"OTEL_ENABLED" envDefault:"true"`
+
+	// OtelServiceName controls the OpenTelemetry service.name resource attribute.
+	OtelServiceName string `env:"OTEL_SERVICE_NAME"`
+
+	// OtelExporterOtlpEndpoint controls the OTLP gRPC endpoint used for traces and metrics.
+	OtelExporterOtlpEndpoint string `env:"OTEL_EXPORTER_OTLP_ENDPOINT"`
 }
 
 // Load parses environment variables into Config while applying defaults.
