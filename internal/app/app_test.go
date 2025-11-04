@@ -199,8 +199,8 @@ func TestRunPropagatesStdioError(t *testing.T) {
 	setupRunTest(t, stubMCP, stubHTTP)
 
 	a := New(config.Config{
-		ArgoWatcherBaseURL:  "https://example.com",
-		TransportMode:       config.TransportModeStdio,
+		ArgoWatcherBaseURL: "https://example.com",
+		TransportMode:      config.TransportModeStdio,
 	}, slog.New(slog.NewJSONHandler(io.Discard, nil)))
 
 	err := a.Run(context.Background())
@@ -246,6 +246,29 @@ func TestRunPropagatesHTTPShutdownError(t *testing.T) {
 	err := a.Run(ctx)
 	if err == nil || !errors.Is(err, stubHTTP.shutdownErr) {
 		t.Fatalf("expected shutdown failure, got %v", err)
+	}
+}
+
+// TestRunUnsupportedMode verifies Run returns an error when the transport mode is unsupported.
+func TestRunUnsupportedMode(t *testing.T) {
+	stubMCP := &stubMCPServer{}
+
+	setupRunTest(t, stubMCP, &stubHTTPServer{})
+
+	app := New(config.Config{
+		ArgoWatcherBaseURL: "https://example.com",
+		TransportMode:      "websocket",
+	}, slog.New(slog.NewJSONHandler(io.Discard, nil)))
+
+	err := app.Run(context.Background())
+	if err == nil {
+		t.Fatal("expected error for unsupported transport mode")
+	}
+	if !strings.Contains(err.Error(), "unsupported transport mode: websocket") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if stubMCP.runCalled {
+		t.Fatal("expected stdio transport not to run in unsupported mode")
 	}
 }
 
