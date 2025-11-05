@@ -1,0 +1,49 @@
+Troubleshooting plan for noisy HTTP spans (MCP server)
+=====================================================
+
+Context
+-------
+- OTel HTTP middleware now logs every decision in `shouldTraceRequest` at debug level.
+- Filter excludes handshake JSON-RPC calls and health/metrics paths, but the exact mix of RPC methods still needs verification.
+- Goal: keep a single `http.server` span per meaningful MCP tool invocation while suppressing handshake/SSE noise.
+
+Prerequisites
+-------------
+1. Run the MCP stack with log level set to `debug` (e.g., export `LOG_LEVEL=debug` before starting docker-compose or adjust the logger configuration if different).
+2. Ensure logs from `argo-watcher-mcp` are persisted (container stdout or a file) so the new `"otelhttp filter decision"` entries can be examined.
+
+Step-by-step plan
+-----------------
+1. Capture incoming traffic profile
+   - Tail the MCP server logs while exercising the VS Code agent for a few minutes.
+   - For each `"otelhttp filter decision"` log entry, note:
+     * `http_method`
+     * `path`
+     * `rpc_method`
+     * `trace` flag / `reason`
+   - Expected outcome: identify which RPC methods still appear with `trace=false` when they should be traced, or vice versa.
+
+2. Cross-check with trace exports
+   - Collect the OTLP dumps (the `Trace-*.json` files) for the same time window.
+   - Confirm that `http.server` spans are present only when the log decision reported `trace=true`.
+   - Look for any remaining “duplicate” traces caused by repeated tool invocations rather than handshake noise.
+
+3. Refine filter logic
+   - Build a definitive list of handshake methods encountered in step 1. Update the `handshakeMethods` map in `internal/httpserver/router.go` to include every method that should be suppressed.
+   - Consider adding an allow-list (`toolMethods`) if only a handful of RPC methods should generate traces.
+   - If certain handshake requests resemble tool calls (same method name but different params), evaluate filtering on request body fields (e.g., `params.stream` or SSE headers) before allowing the trace.
+
+4. Validate the changes
+   - Re-run the agent workflow and watch the debug logs for the new decisions.
+   - Ensure that exactly one `http.server` span appears for each logical MCP tool call in the exported traces.
+   - Run `go test ./...` in a local environment with full system libraries (the sandbox misses `libresolv`).
+
+5. Clean up instrumentation aid
+   - Once the filter logic is verified, downgrade or remove the debug logging to avoid flooding logs in production.
+   - Commit the final filter plus documentation summarising which RPC methods are traced and why.
+
+Additional considerations
+-------------------------
+- If body parsing becomes a bottleneck, introduce a small read cap or cached inspection so large payloads do not incur extra allocation.
+- Document the filter behaviour in `doc.go` (telemetry package) or project README so future contributors understand how tracing is scoped.
+- Consider exposing the handshake/tool allow-lists via configuration to simplify future adjustments without code changes.

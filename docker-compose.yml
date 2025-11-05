@@ -1,0 +1,82 @@
+services:
+  tempo:
+    image: grafana/tempo:latest
+    command: ["-config.file=/etc/tempo.yaml"]
+    volumes:
+      - ./docker/tempo-config.yml:/etc/tempo.yaml
+    ports:
+      - "3200:3200"
+      - "43170:43170" # OTLP gRPC direct
+    networks:
+      - otel-network
+
+  loki:
+    image: grafana/loki:latest
+    command: -config.file=/etc/loki/local-config.yaml
+    environment:
+      - LOKI_LIMITS_CONFIG_ALLOW_STRUCTURED_METADATA=true
+    ports:
+      - "3100:3100"
+    networks:
+      - otel-network
+
+  prometheus:
+    image: prom/prometheus:latest
+    volumes:
+      - ./docker/prometheus.yml:/etc/prometheus/prometheus.yml
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --web.enable-otlp-receiver
+      - --web.enable-remote-write-receiver
+      - --enable-feature=exemplar-storage
+    ports:
+      - "9090:9090"
+    networks:
+      - otel-network
+
+  grafana:
+    image: grafana/grafana:latest
+    environment:
+      - GF_AUTH_ANONYMOUS_ENABLED=true
+      - GF_AUTH_ANONYMOUS_ORG_ROLE=Admin
+    volumes:
+      - ./docker/grafana/datasources.yml:/etc/grafana/provisioning/datasources/datasources.yml
+    ports:
+      - "3000:3000"
+    networks:
+      - otel-network
+
+  otel-collector:
+    image: otel/opentelemetry-collector-contrib:latest
+    volumes:
+      - ./docker/otel-collector-config.yml:/etc/otel-collector-config.yml
+    command: ["--config=/etc/otel-collector-config.yml"]
+    ports:
+      - "4317:4317" # OTLP gRPC
+      - "4318:4318" # OTLP HTTP
+    networks:
+      - otel-network
+
+  mcp:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    environment:
+      # This service name must match the service name in otel-collector-config.yml
+      - OTEL_EXPORTER_OTLP_ENDPOINT=otel-collector:4317
+      - ARGO_WATCHER_URL=http://host.docker.internal:8080 # Assumes argo-watcher is on your host
+      - OTEL_ENABLED=true
+      - TRANSPORT_MODE=http
+      - OTEL_EXPORTER_OTLP_INSECURE=true
+    depends_on:
+      - otel-collector
+      - grafana
+      - prometheus
+      - loki
+    ports:
+      - "8000:8000"
+    networks:
+      - otel-network
+
+networks:
+  otel-network:

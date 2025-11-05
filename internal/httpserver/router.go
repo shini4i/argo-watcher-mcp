@@ -144,36 +144,69 @@ func LoggerFromContext(ctx context.Context, fallback *slog.Logger) *slog.Logger 
 }
 
 func shouldTraceRequest(req *http.Request) bool {
-	switch req.URL.Path {
-	case "/metrics", "/healthz", "/readyz":
-		return false
+	trace := true
+	reason := "allow"
+	methodName := ""
+
+	if _, skip := excludedPaths[req.URL.Path]; skip {
+		trace = false
+		reason = "excluded_path"
+	} else if req.Method == http.MethodGet && strings.Contains(req.Header.Get("Accept"), "text/event-stream") {
+		trace = false
+		reason = "sse_stream"
+	} else if req.Method == http.MethodPost && strings.Contains(req.Header.Get("Content-Type"), "application/json") {
+		body, err := io.ReadAll(req.Body)
+		_ = req.Body.Close()
+		req.Body = io.NopCloser(bytes.NewReader(body))
+		if err != nil {
+			reason = "body_read_error"
+		} else {
+			var envelope struct {
+				Method string `json:"method"`
+			}
+			if err := json.Unmarshal(body, &envelope); err != nil {
+				reason = "rpc_parse_error"
+			} else {
+				methodName = strings.ToLower(strings.TrimSpace(envelope.Method))
+				switch {
+				case methodName == "":
+					reason = "rpc_no_method"
+				case handshakeMethods[methodName]:
+					trace = false
+					reason = "handshake_method"
+				default:
+					reason = "rpc_method"
+				}
+			}
+		}
 	}
 
-	if strings.Contains(req.Header.Get("Accept"), "text/event-stream") {
-		return false
-	}
+	slog.Debug("otelhttp filter decision",
+		slog.Bool("trace", trace),
+		slog.String("reason", reason),
+		slog.String("path", req.URL.Path),
+		slog.String("http_method", req.Method),
+		slog.String("accept", req.Header.Get("Accept")),
+		slog.String("rpc_method", methodName),
+	)
 
-	if req.Method != http.MethodPost {
-		return true
-	}
+	return trace
+}
 
-	if !strings.Contains(req.Header.Get("Content-Type"), "application/json") {
-		return true
-	}
+var excludedPaths = map[string]struct{}{
+	"/metrics": {},
+	"/healthz": {},
+	"/readyz":  {},
+}
 
-	body, err := io.ReadAll(req.Body)
-	_ = req.Body.Close()
-	req.Body = io.NopCloser(bytes.NewReader(body))
-	if err != nil {
-		return true
-	}
-
-	var envelope struct {
-		Method string `json:"method"`
-	}
-	if err := json.Unmarshal(body, &envelope); err != nil {
-		return true
-	}
-
-	return envelope.Method == "call_tool"
+var handshakeMethods = map[string]bool{
+	"initialize":                true,
+	"notifications/subscribe":   true,
+	"notifications/unsubscribe": true,
+	"resources/list":            true,
+	"resources/get":             true,
+	"prompts/list":              true,
+	"capabilities/list":         true,
+	"capabilities/set":          true,
+	"ping":                      true,
 }
