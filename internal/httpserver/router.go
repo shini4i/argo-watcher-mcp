@@ -4,8 +4,10 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"io"
 	"log/slog"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -37,9 +39,7 @@ func NewRouter(logger *slog.Logger, checker domain.HealthChecker, mcpHandler htt
 		return otelhttp.NewHandler(
 			next,
 			"http.server",
-			otelhttp.WithFilter(func(req *http.Request) bool {
-				return req.URL.Path != "/metrics"
-			}),
+			otelhttp.WithFilter(shouldTraceRequest),
 		)
 	})
 
@@ -141,4 +141,39 @@ func LoggerFromContext(ctx context.Context, fallback *slog.Logger) *slog.Logger 
 	}
 
 	return slog.Default()
+}
+
+func shouldTraceRequest(req *http.Request) bool {
+	switch req.URL.Path {
+	case "/metrics", "/healthz", "/readyz":
+		return false
+	}
+
+	if strings.Contains(req.Header.Get("Accept"), "text/event-stream") {
+		return false
+	}
+
+	if req.Method != http.MethodPost {
+		return true
+	}
+
+	if !strings.Contains(req.Header.Get("Content-Type"), "application/json") {
+		return true
+	}
+
+	body, err := io.ReadAll(req.Body)
+	_ = req.Body.Close()
+	req.Body = io.NopCloser(bytes.NewReader(body))
+	if err != nil {
+		return true
+	}
+
+	var envelope struct {
+		Method string `json:"method"`
+	}
+	if err := json.Unmarshal(body, &envelope); err != nil {
+		return true
+	}
+
+	return envelope.Method == "call_tool"
 }
