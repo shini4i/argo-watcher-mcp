@@ -10,6 +10,12 @@ import (
 	"testing"
 	"time"
 
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
+	tracesdk "go.opentelemetry.io/otel/sdk/trace"
+	"go.opentelemetry.io/otel/sdk/trace/tracetest"
+	"go.opentelemetry.io/otel/trace"
+
 	"github.com/shini4i/argo-watcher-mcp/internal/domain"
 )
 
@@ -147,6 +153,78 @@ func TestListDeployments(t *testing.T) {
 	}
 	if metrics.reachable != 1 || metrics.unreachable != 0 {
 		t.Fatalf("expected reachability metrics reachable=1 unreachable=0, got %d/%d", metrics.reachable, metrics.unreachable)
+	}
+}
+
+func TestListDeploymentsEmitsSpan(t *testing.T) {
+	spanRecorder := tracetest.NewSpanRecorder()
+	orig := otel.GetTracerProvider()
+	tp := tracesdk.NewTracerProvider()
+	tp.RegisterSpanProcessor(spanRecorder)
+	otel.SetTracerProvider(tp)
+	t.Cleanup(func() {
+		_ = tp.Shutdown(context.Background())
+		otel.SetTracerProvider(orig)
+	})
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		response := map[string]any{
+			"tasks": []any{
+				map[string]any{
+					"id":      "task-1",
+					"app":     "api",
+					"author":  "alice",
+					"project": "proj",
+					"images":  []any{},
+					"status":  "Success",
+					"created": time.Unix(10, 0).UTC(),
+					"updated": time.Unix(20, 0).UTC(),
+				},
+			},
+		}
+		if err := json.NewEncoder(w).Encode(response); err != nil {
+			t.Fatalf("encode response: %v", err)
+		}
+	}))
+	defer srv.Close()
+
+	client := New(srv.URL, srv.Client(), nil)
+	_, err := client.ListDeployments(context.Background(), domain.DeploymentFilter{
+		FromTimestamp: 10,
+		ToTimestamp:   20,
+	})
+	if err != nil {
+		t.Fatalf("expected no error, got %v", err)
+	}
+
+	spans := spanRecorder.Ended()
+	if len(spans) != 1 {
+		t.Fatalf("expected 1 span, got %d", len(spans))
+	}
+
+	span := spans[0]
+	if span.Name() != "client.list_deployments" {
+		t.Fatalf("expected span name client.list_deployments, got %s", span.Name())
+	}
+	if span.SpanKind() != trace.SpanKindInternal {
+		t.Fatalf("expected internal span, got %v", span.SpanKind())
+	}
+
+	foundURL := false
+	foundResult := false
+	for _, attr := range span.Attributes() {
+		switch attr.Key {
+		case attribute.Key("argo_watcher.request_url"):
+			foundURL = attr.Value.AsString() == srv.URL+"/api/v1/tasks?from_timestamp=10&to_timestamp=20"
+		case attribute.Key("argo_watcher.result_count"):
+			foundResult = attr.Value.AsInt64() == 1
+		}
+	}
+	if !foundURL {
+		t.Fatalf("expected span to include argo_watcher.request_url attribute, got %+v", span.Attributes())
+	}
+	if !foundResult {
+		t.Fatalf("expected span to include result count attribute, got %+v", span.Attributes())
 	}
 }
 

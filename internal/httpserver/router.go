@@ -34,7 +34,13 @@ func NewRouter(logger *slog.Logger, checker domain.HealthChecker, mcpHandler htt
 	)
 
 	r.Use(func(next http.Handler) http.Handler {
-		return otelhttp.NewHandler(next, "http.server")
+		return otelhttp.NewHandler(
+			next,
+			"http.server",
+			otelhttp.WithFilter(func(req *http.Request) bool {
+				return req.URL.Path != "/metrics"
+			}),
+		)
 	})
 
 	r.Use(func(next http.Handler) http.Handler {

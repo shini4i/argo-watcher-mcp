@@ -12,6 +12,11 @@ import (
 	"strings"
 	"time"
 
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/codes"
+	"go.opentelemetry.io/otel/trace"
+
 	"github.com/shini4i/argo-watcher-mcp/internal/domain"
 	"github.com/shini4i/argo-watcher-mcp/internal/telemetry"
 )
@@ -90,11 +95,28 @@ func (c *Client) Check(ctx context.Context) error {
 	return nil
 }
 
-// ListDeployments fetches deployment tasks from the API and maps them to domain objects.
+// ListDeployments fetches deployment tasks from the API, emits tracing spans, and maps them to domain objects.
 func (c *Client) ListDeployments(ctx context.Context, filter domain.DeploymentFilter) ([]domain.Deployment, error) {
+	ctx, span := otel.Tracer("github.com/shini4i/argo-watcher-mcp/argowatcher").Start(
+		ctx,
+		"client.list_deployments",
+		trace.WithSpanKind(trace.SpanKindInternal),
+	)
+	defer span.End()
+	span.SetAttributes(
+		attribute.String("argo_watcher.base_url", c.baseURL),
+		attribute.Int64("argo_watcher.from_timestamp", filter.FromTimestamp),
+		attribute.Int64("argo_watcher.to_timestamp", filter.ToTimestamp),
+	)
+	if filter.App != nil {
+		span.SetAttributes(attribute.String("argo_watcher.app", *filter.App))
+	}
+
 	endpoint, err := url.Parse(c.baseURL + "/api/v1/tasks")
 	if err != nil {
 		c.metrics.ReportUnreachable()
+		span.RecordError(err)
+		span.SetStatus(codes.Error, err.Error())
 		return nil, fmt.Errorf("parse tasks endpoint: %w", err)
 	}
 
@@ -107,16 +129,23 @@ func (c *Client) ListDeployments(ctx context.Context, filter domain.DeploymentFi
 		query.Set("app", *filter.App)
 	}
 	endpoint.RawQuery = query.Encode()
+	if span.IsRecording() {
+		span.SetAttributes(attribute.String("argo_watcher.request_url", endpoint.String()))
+	}
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint.String(), nil)
 	if err != nil {
 		c.metrics.ReportUnreachable()
+		span.RecordError(err)
+		span.SetStatus(codes.Error, err.Error())
 		return nil, fmt.Errorf("build tasks request: %w", err)
 	}
 
 	resp, err := c.client.Do(req)
 	if err != nil {
 		c.metrics.ReportUnreachable()
+		span.RecordError(err)
+		span.SetStatus(codes.Error, err.Error())
 		return nil, fmt.Errorf("fetch tasks: %w", err)
 	}
 	defer resp.Body.Close()
@@ -130,9 +159,14 @@ func (c *Client) ListDeployments(ctx context.Context, filter domain.DeploymentFi
 			slog.String("url", endpoint.String()),
 		)
 		c.metrics.ReportUnreachable()
-		return nil, fmt.Errorf("fetch tasks: status %d body %q", resp.StatusCode, bodyStr)
+		err := fmt.Errorf("fetch tasks: status %d body %q", resp.StatusCode, bodyStr)
+		span.RecordError(err)
+		span.SetAttributes(attribute.Int("http.status_code", resp.StatusCode))
+		span.SetStatus(codes.Error, err.Error())
+		return nil, err
 	}
 	c.metrics.ReportReachable()
+	span.SetAttributes(attribute.Int("http.status_code", resp.StatusCode))
 
 	var payload struct {
 		Tasks []taskPayload `json:"tasks"`
@@ -140,6 +174,8 @@ func (c *Client) ListDeployments(ctx context.Context, filter domain.DeploymentFi
 
 	if err := json.NewDecoder(resp.Body).Decode(&payload); err != nil {
 		c.logger.Error("decode tasks response", slog.Any("error", err))
+		span.RecordError(err)
+		span.SetStatus(codes.Error, err.Error())
 		return nil, fmt.Errorf("decode tasks response: %w", err)
 	}
 
@@ -147,10 +183,15 @@ func (c *Client) ListDeployments(ctx context.Context, filter domain.DeploymentFi
 	for _, task := range payload.Tasks {
 		deployment, err := task.toDomain()
 		if err != nil {
+			span.RecordError(err)
+			span.SetStatus(codes.Error, err.Error())
 			return nil, fmt.Errorf("convert task %q: %w", task.ID, err)
 		}
 		deployments = append(deployments, deployment)
 	}
+
+	span.SetAttributes(attribute.Int("argo_watcher.result_count", len(deployments)))
+	span.SetStatus(codes.Ok, "completed")
 
 	return deployments, nil
 }

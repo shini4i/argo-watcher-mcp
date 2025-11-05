@@ -12,6 +12,15 @@ import (
 	"testing"
 	"time"
 
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/propagation"
+	tracesdk "go.opentelemetry.io/otel/sdk/trace"
+	"go.opentelemetry.io/otel/sdk/trace/tracetest"
+	"go.opentelemetry.io/otel/trace"
+
+	"github.com/modelcontextprotocol/go-sdk/mcp"
+
 	"github.com/shini4i/argo-watcher-mcp/internal/clock"
 	"github.com/shini4i/argo-watcher-mcp/internal/domain"
 )
@@ -191,6 +200,123 @@ func TestGetDeploymentsHandlerDaysHistoryOverride(t *testing.T) {
 	}
 	if fakeService.capturedFilter.ToTimestamp != wantTo {
 		t.Fatalf("expected to timestamp %d, got %d", wantTo, fakeService.capturedFilter.ToTimestamp)
+	}
+}
+
+func TestGetDeploymentsHandlerEmitsSpan(t *testing.T) {
+	spanRecorder := tracetest.NewSpanRecorder()
+	orig := otel.GetTracerProvider()
+	origProp := otel.GetTextMapPropagator()
+	tp := tracesdk.NewTracerProvider()
+	tp.RegisterSpanProcessor(spanRecorder)
+	otel.SetTracerProvider(tp)
+	otel.SetTextMapPropagator(propagation.NewCompositeTextMapPropagator(propagation.TraceContext{}, propagation.Baggage{}))
+	t.Cleanup(func() {
+		_ = tp.Shutdown(context.Background())
+		otel.SetTracerProvider(orig)
+		otel.SetTextMapPropagator(origProp)
+	})
+
+	fakeService := &stubDeploymentService{
+		result: []domain.Deployment{{ID: "task-1"}},
+	}
+
+	handler := &getDeploymentsHandler{
+		clock:   clock.FixedClock{At: time.Unix(1, 0)},
+		svc:     fakeService,
+		metrics: &trackingMetrics{},
+	}
+
+	if _, _, err := handler.Handle(context.Background(), nil, getDeploymentsInput{}); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	spans := spanRecorder.Ended()
+	if len(spans) != 1 {
+		t.Fatalf("expected 1 span, got %d", len(spans))
+	}
+
+	span := spans[0]
+	if got := span.Name(); got != "tool.get_deployments" {
+		t.Fatalf("expected span name tool.get_deployments, got %s", got)
+	}
+	if got := span.SpanKind(); got != trace.SpanKindServer {
+		t.Fatalf("expected server span, got %v", got)
+	}
+
+	foundResultAttr := false
+	for _, attr := range span.Attributes() {
+		if attr.Key == attribute.Key("argo_watcher.result_count") && attr.Value.AsInt64() == 1 {
+			foundResultAttr = true
+			break
+		}
+	}
+	if !foundResultAttr {
+		t.Fatalf("expected span to include result count attribute, got %+v", span.Attributes())
+	}
+}
+
+func TestGetDeploymentsHandlerPropagatesTraceContext(t *testing.T) {
+	traceID, err := trace.TraceIDFromHex("4d2e3f4a5b6c7d8e9f00112233445566")
+	if err != nil {
+		t.Fatalf("parse trace ID: %v", err)
+	}
+	parentSpanID, err := trace.SpanIDFromHex("0011223344556677")
+	if err != nil {
+		t.Fatalf("parse span ID: %v", err)
+	}
+	parentCtx := trace.ContextWithSpanContext(context.Background(), trace.NewSpanContext(trace.SpanContextConfig{
+		TraceID:    traceID,
+		SpanID:     parentSpanID,
+		TraceFlags: trace.FlagsSampled,
+		Remote:     true,
+	}))
+
+	headers := http.Header{}
+	prop := propagation.TraceContext{}
+	prop.Inject(parentCtx, propagation.HeaderCarrier(headers))
+
+	spanRecorder := tracetest.NewSpanRecorder()
+	orig := otel.GetTracerProvider()
+	tp := tracesdk.NewTracerProvider()
+	tp.RegisterSpanProcessor(spanRecorder)
+	otel.SetTracerProvider(tp)
+	t.Cleanup(func() {
+		_ = tp.Shutdown(context.Background())
+		otel.SetTracerProvider(orig)
+	})
+
+	fakeService := &stubDeploymentService{
+		result: []domain.Deployment{{ID: "task-1"}},
+	}
+
+	handler := &getDeploymentsHandler{
+		clock:   clock.FixedClock{At: time.Unix(1, 0)},
+		svc:     fakeService,
+		metrics: &trackingMetrics{},
+	}
+
+	req := &mcp.CallToolRequest{
+		Extra: &mcp.RequestExtra{
+			Header: headers,
+		},
+	}
+
+	if _, _, err := handler.Handle(context.Background(), req, getDeploymentsInput{}); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	spans := spanRecorder.Ended()
+	if len(spans) != 1 {
+		t.Fatalf("expected 1 span, got %d", len(spans))
+	}
+
+	span := spans[0]
+	if span.SpanContext().TraceID() != traceID {
+		t.Fatalf("expected span trace ID %s, got %s", traceID, span.SpanContext().TraceID())
+	}
+	if span.Parent().SpanID() != parentSpanID {
+		t.Fatalf("expected parent span ID %s, got %s", parentSpanID, span.Parent().SpanID())
 	}
 }
 

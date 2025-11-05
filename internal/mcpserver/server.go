@@ -8,6 +8,11 @@ import (
 	"time"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/codes"
+	"go.opentelemetry.io/otel/propagation"
+	"go.opentelemetry.io/otel/trace"
 
 	"github.com/shini4i/argo-watcher-mcp/internal/clock"
 	"github.com/shini4i/argo-watcher-mcp/internal/domain"
@@ -123,8 +128,22 @@ type getDeploymentsHandler struct {
 	metrics telemetry.MCPRequestMetrics
 }
 
-// Handle executes the get_deployments tool logic and logs the processed request.
-func (h *getDeploymentsHandler) Handle(ctx context.Context, _ *mcp.CallToolRequest, input getDeploymentsInput) (*mcp.CallToolResult, any, error) {
+// Handle executes the get_deployments tool logic, emits tracing spans, and logs the processed request.
+func (h *getDeploymentsHandler) Handle(ctx context.Context, req *mcp.CallToolRequest, input getDeploymentsInput) (*mcp.CallToolResult, any, error) {
+	if sc := trace.SpanContextFromContext(ctx); !sc.IsValid() && req != nil && req.Extra != nil && req.Extra.Header != nil {
+		ctx = otel.GetTextMapPropagator().Extract(ctx, propagation.HeaderCarrier(req.Extra.Header))
+	}
+	span := trace.SpanFromContext(ctx)
+	createdSpan := false
+	if !span.IsRecording() {
+		ctx, span = otel.Tracer("github.com/shini4i/argo-watcher-mcp/mcpserver").Start(ctx, "tool.get_deployments",
+			trace.WithSpanKind(trace.SpanKindServer))
+		createdSpan = true
+	}
+	if createdSpan {
+		defer span.End()
+	}
+
 	logger := loggerFromContext(ctx, h.logger)
 	now := h.nowUnix()
 
@@ -146,7 +165,10 @@ func (h *getDeploymentsHandler) Handle(ctx context.Context, _ *mcp.CallToolReque
 			if h.metrics != nil {
 				h.metrics.RecordInvalid(ctx)
 			}
-			return nil, nil, fmt.Errorf("days_history must be non-negative")
+			err := fmt.Errorf("days_history must be non-negative")
+			span.RecordError(err)
+			span.SetStatus(codes.Error, err.Error())
+			return nil, nil, err
 		}
 		from = *to - int64(days)*24*60*60
 	}
@@ -155,7 +177,10 @@ func (h *getDeploymentsHandler) Handle(ctx context.Context, _ *mcp.CallToolReque
 		if h.metrics != nil {
 			h.metrics.RecordInvalid(ctx)
 		}
-		return nil, nil, fmt.Errorf("from_timestamp cannot be greater than to_timestamp")
+		err := fmt.Errorf("from_timestamp cannot be greater than to_timestamp")
+		span.RecordError(err)
+		span.SetStatus(codes.Error, err.Error())
+		return nil, nil, err
 	}
 
 	filter := domain.DeploymentFilter{
@@ -167,6 +192,13 @@ func (h *getDeploymentsHandler) Handle(ctx context.Context, _ *mcp.CallToolReque
 	if logger != nil {
 		logger.LogAttrs(ctx, slog.LevelInfo, "get_deployments request", h.requestAttrs(filter)...)
 	}
+	span.SetAttributes(
+		attribute.Int64("argo_watcher.from_timestamp", filter.FromTimestamp),
+		attribute.Int64("argo_watcher.to_timestamp", filter.ToTimestamp),
+	)
+	if filter.App != nil {
+		span.SetAttributes(attribute.String("argo_watcher.app", *filter.App))
+	}
 
 	result, err := h.svc.ListDeployments(ctx, filter)
 	if err != nil {
@@ -177,6 +209,8 @@ func (h *getDeploymentsHandler) Handle(ctx context.Context, _ *mcp.CallToolReque
 		if h.metrics != nil {
 			h.metrics.RecordFailure(ctx)
 		}
+		span.RecordError(err)
+		span.SetStatus(codes.Error, err.Error())
 		return nil, nil, err
 	}
 
@@ -187,6 +221,8 @@ func (h *getDeploymentsHandler) Handle(ctx context.Context, _ *mcp.CallToolReque
 	if h.metrics != nil {
 		h.metrics.RecordSuccess(ctx)
 	}
+	span.SetAttributes(attribute.Int("argo_watcher.result_count", len(result)))
+	span.SetStatus(codes.Ok, "completed")
 
 	return nil, result, nil
 }
