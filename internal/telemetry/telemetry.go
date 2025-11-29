@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"net"
 	"net/http"
 	"strings"
 
@@ -27,7 +28,31 @@ import (
 	"github.com/shini4i/argo-watcher-mcp/internal/config"
 )
 
-var dialOTLP = grpc.DialContext
+var dialOTLP = func(ctx context.Context, target string, opts ...grpc.DialOption) (*grpc.ClientConn, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+
+	opts = append([]grpc.DialOption{
+		grpc.WithContextDialer(func(ctx context.Context, addr string) (net.Conn, error) {
+			return (&net.Dialer{}).DialContext(ctx, "tcp", addr)
+		}),
+	}, opts...)
+
+	conn, err := grpc.NewClient(target, opts...)
+	if err != nil {
+		return nil, err
+	}
+
+	if ctx.Done() != nil {
+		go func() {
+			<-ctx.Done()
+			_ = conn.Close()
+		}()
+	}
+
+	return conn, nil
+}
 
 // Provider owns the telemetry exporters and their lifecycle hooks.
 type Provider struct {

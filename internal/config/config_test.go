@@ -104,6 +104,9 @@ func TestLoadSuccess(t *testing.T) {
 			if cfg.OtelExporterOtlpEndpoint != tc.expected.OtelExporterOtlpEndpoint {
 				t.Fatalf("expected OtelExporterOtlpEndpoint %q, got %q", tc.expected.OtelExporterOtlpEndpoint, cfg.OtelExporterOtlpEndpoint)
 			}
+			if cfg.OtelExporterOtlpInsecure != tc.expected.OtelExporterOtlpInsecure {
+				t.Fatalf("expected OtelExporterOtlpInsecure %t, got %t", tc.expected.OtelExporterOtlpInsecure, cfg.OtelExporterOtlpInsecure)
+			}
 		})
 	}
 }

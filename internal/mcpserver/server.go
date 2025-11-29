@@ -162,9 +162,7 @@ func (h *getDeploymentsHandler) Handle(ctx context.Context, req *mcp.CallToolReq
 			days = *input.DaysHistory
 		}
 		if days < 0 {
-			if h.metrics != nil {
-				h.metrics.RecordInvalid(ctx)
-			}
+			h.metrics.RecordInvalid(ctx)
 			err := fmt.Errorf("days_history must be non-negative")
 			span.RecordError(err)
 			span.SetStatus(codes.Error, err.Error())
@@ -174,9 +172,7 @@ func (h *getDeploymentsHandler) Handle(ctx context.Context, req *mcp.CallToolReq
 	}
 
 	if from > *to {
-		if h.metrics != nil {
-			h.metrics.RecordInvalid(ctx)
-		}
+		h.metrics.RecordInvalid(ctx)
 		err := fmt.Errorf("from_timestamp cannot be greater than to_timestamp")
 		span.RecordError(err)
 		span.SetStatus(codes.Error, err.Error())
@@ -206,9 +202,7 @@ func (h *getDeploymentsHandler) Handle(ctx context.Context, req *mcp.CallToolReq
 			attrs := append(h.requestAttrs(filter), slog.Any("error", err))
 			logger.LogAttrs(ctx, slog.LevelError, "get_deployments failed", attrs...)
 		}
-		if h.metrics != nil {
-			h.metrics.RecordFailure(ctx)
-		}
+		h.metrics.RecordFailure(ctx)
 		span.RecordError(err)
 		span.SetStatus(codes.Error, err.Error())
 		return nil, nil, err
@@ -218,9 +212,7 @@ func (h *getDeploymentsHandler) Handle(ctx context.Context, req *mcp.CallToolReq
 		attrs := append(h.requestAttrs(filter), slog.Int("count", len(result)))
 		logger.LogAttrs(ctx, slog.LevelInfo, "get_deployments completed", attrs...)
 	}
-	if h.metrics != nil {
-		h.metrics.RecordSuccess(ctx)
-	}
+	h.metrics.RecordSuccess(ctx)
 	span.SetAttributes(attribute.Int("argo_watcher.result_count", len(result)))
 	span.SetStatus(codes.Ok, "completed")
 

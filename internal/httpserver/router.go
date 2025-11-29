@@ -155,7 +155,8 @@ func shouldTraceRequest(req *http.Request) bool {
 		trace = false
 		reason = "sse_stream"
 	} else if req.Method == http.MethodPost && strings.Contains(req.Header.Get("Content-Type"), "application/json") {
-		body, err := io.ReadAll(req.Body)
+		const maxBodySize = 1024
+		body, err := io.ReadAll(io.LimitReader(req.Body, maxBodySize))
 		_ = req.Body.Close()
 		req.Body = io.NopCloser(bytes.NewReader(body))
 		if err != nil {
