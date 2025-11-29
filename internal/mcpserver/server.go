@@ -8,9 +8,16 @@ import (
 	"time"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/codes"
+	"go.opentelemetry.io/otel/propagation"
+	"go.opentelemetry.io/otel/trace"
 
 	"github.com/shini4i/argo-watcher-mcp/internal/clock"
 	"github.com/shini4i/argo-watcher-mcp/internal/domain"
+	"github.com/shini4i/argo-watcher-mcp/internal/httpserver"
+	"github.com/shini4i/argo-watcher-mcp/internal/telemetry"
 )
 
 // Server wraps an MCP server instance and its tool registrations.
@@ -34,6 +41,8 @@ type Options struct {
 	Clock clock.Clock
 	// Logger records tool activity. When nil, slog.Default is used.
 	Logger *slog.Logger
+	// Metrics records MCP tool request outcomes. Defaults to a no-op recorder.
+	Metrics telemetry.MCPRequestMetrics
 }
 
 // New constructs an MCP server with all tools registered.
@@ -48,15 +57,21 @@ func New(opts Options) (*Server, error) {
 	}
 	logger = logger.With("component", "mcpserver")
 
+	metrics := opts.Metrics
+	if metrics == nil {
+		metrics = telemetry.NoopMCPRequestMetrics()
+	}
+
 	srv := mcp.NewServer(&mcp.Implementation{
 		Name:    opts.Name,
 		Version: opts.Version,
 	}, nil)
 
 	handler := &getDeploymentsHandler{
-		clock:  opts.Clock,
-		svc:    opts.Service,
-		logger: logger.With("tool", "get_deployments"),
+		clock:   opts.Clock,
+		svc:     opts.Service,
+		logger:  logger.With("tool", "get_deployments"),
+		metrics: metrics,
 	}
 
 	mcp.AddTool(srv, &mcp.Tool{
@@ -107,13 +122,29 @@ type getDeploymentsInput struct {
 }
 
 type getDeploymentsHandler struct {
-	clock  clock.Clock
-	svc    domain.DeploymentService
-	logger *slog.Logger
+	clock   clock.Clock
+	svc     domain.DeploymentService
+	logger  *slog.Logger
+	metrics telemetry.MCPRequestMetrics
 }
 
-// Handle executes the get_deployments tool logic and logs the processed request.
-func (h *getDeploymentsHandler) Handle(ctx context.Context, _ *mcp.CallToolRequest, input getDeploymentsInput) (*mcp.CallToolResult, any, error) {
+// Handle executes the get_deployments tool logic, emits tracing spans, and logs the processed request.
+func (h *getDeploymentsHandler) Handle(ctx context.Context, req *mcp.CallToolRequest, input getDeploymentsInput) (*mcp.CallToolResult, any, error) {
+	if sc := trace.SpanContextFromContext(ctx); !sc.IsValid() && req != nil && req.Extra != nil && req.Extra.Header != nil {
+		ctx = otel.GetTextMapPropagator().Extract(ctx, propagation.HeaderCarrier(req.Extra.Header))
+	}
+	span := trace.SpanFromContext(ctx)
+	createdSpan := false
+	if !span.IsRecording() {
+		ctx, span = otel.Tracer("github.com/shini4i/argo-watcher-mcp/mcpserver").Start(ctx, "tool.get_deployments",
+			trace.WithSpanKind(trace.SpanKindServer))
+		createdSpan = true
+	}
+	if createdSpan {
+		defer span.End()
+	}
+
+	logger := loggerFromContext(ctx, h.logger)
 	now := h.nowUnix()
 
 	to := input.ToUnix
@@ -131,13 +162,21 @@ func (h *getDeploymentsHandler) Handle(ctx context.Context, _ *mcp.CallToolReque
 			days = *input.DaysHistory
 		}
 		if days < 0 {
-			return nil, nil, fmt.Errorf("days_history must be non-negative")
+			h.metrics.RecordInvalid(ctx)
+			err := fmt.Errorf("days_history must be non-negative")
+			span.RecordError(err)
+			span.SetStatus(codes.Error, err.Error())
+			return nil, nil, err
 		}
 		from = *to - int64(days)*24*60*60
 	}
 
 	if from > *to {
-		return nil, nil, fmt.Errorf("from_timestamp cannot be greater than to_timestamp")
+		h.metrics.RecordInvalid(ctx)
+		err := fmt.Errorf("from_timestamp cannot be greater than to_timestamp")
+		span.RecordError(err)
+		span.SetStatus(codes.Error, err.Error())
+		return nil, nil, err
 	}
 
 	filter := domain.DeploymentFilter{
@@ -146,23 +185,36 @@ func (h *getDeploymentsHandler) Handle(ctx context.Context, _ *mcp.CallToolReque
 		ToTimestamp:   *to,
 	}
 
-	if h.logger != nil {
-		h.logger.LogAttrs(ctx, slog.LevelInfo, "get_deployments request", h.requestAttrs(filter)...)
+	if logger != nil {
+		logger.LogAttrs(ctx, slog.LevelInfo, "get_deployments request", h.requestAttrs(filter)...)
+	}
+	span.SetAttributes(
+		attribute.Int64("argo_watcher.from_timestamp", filter.FromTimestamp),
+		attribute.Int64("argo_watcher.to_timestamp", filter.ToTimestamp),
+	)
+	if filter.App != nil {
+		span.SetAttributes(attribute.String("argo_watcher.app", *filter.App))
 	}
 
 	result, err := h.svc.ListDeployments(ctx, filter)
 	if err != nil {
-		if h.logger != nil {
+		if logger != nil {
 			attrs := append(h.requestAttrs(filter), slog.Any("error", err))
-			h.logger.LogAttrs(ctx, slog.LevelError, "get_deployments failed", attrs...)
+			logger.LogAttrs(ctx, slog.LevelError, "get_deployments failed", attrs...)
 		}
+		h.metrics.RecordFailure(ctx)
+		span.RecordError(err)
+		span.SetStatus(codes.Error, err.Error())
 		return nil, nil, err
 	}
 
-	if h.logger != nil {
+	if logger != nil {
 		attrs := append(h.requestAttrs(filter), slog.Int("count", len(result)))
-		h.logger.LogAttrs(ctx, slog.LevelInfo, "get_deployments completed", attrs...)
+		logger.LogAttrs(ctx, slog.LevelInfo, "get_deployments completed", attrs...)
 	}
+	h.metrics.RecordSuccess(ctx)
+	span.SetAttributes(attribute.Int("argo_watcher.result_count", len(result)))
+	span.SetStatus(codes.Ok, "completed")
 
 	return nil, result, nil
 }
@@ -185,6 +237,10 @@ func (h *getDeploymentsHandler) requestAttrs(filter domain.DeploymentFilter) []s
 		attrs = append(attrs, slog.String("app", *filter.App))
 	}
 	return attrs
+}
+
+func loggerFromContext(ctx context.Context, fallback *slog.Logger) *slog.Logger {
+	return httpserver.LoggerFromContext(ctx, fallback)
 }
 
 func ptrOf[T any](v T) *T {

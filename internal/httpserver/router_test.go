@@ -9,6 +9,8 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+
+	"github.com/prometheus/client_golang/prometheus/promhttp"
 )
 
 type stubChecker struct {
@@ -20,7 +22,7 @@ func (s *stubChecker) Check(_ context.Context) error {
 }
 
 func TestHealthEndpoints(t *testing.T) {
-	router := NewRouter(nil, &stubChecker{}, nil, false)
+	router := NewRouter(nil, &stubChecker{}, nil, false, nil)
 	server := httptest.NewServer(router)
 	defer server.Close()
 
@@ -41,7 +43,7 @@ func TestHealthEndpoints(t *testing.T) {
 }
 
 func TestReadinessFailures(t *testing.T) {
-	router := NewRouter(nil, &stubChecker{err: errors.New("downstream failed")}, nil, false)
+	router := NewRouter(nil, &stubChecker{err: errors.New("downstream failed")}, nil, false, nil)
 	server := httptest.NewServer(router)
 	defer server.Close()
 
@@ -61,7 +63,7 @@ func TestRouterWithMCPHandler(t *testing.T) {
 		w.WriteHeader(http.StatusAccepted)
 	})
 
-	router := NewRouter(nil, &stubChecker{}, handler, true)
+	router := NewRouter(nil, &stubChecker{}, handler, true, nil)
 	server := httptest.NewServer(router)
 	defer server.Close()
 
@@ -83,7 +85,7 @@ func TestRouterWithMCPHandlerDisabled(t *testing.T) {
 		w.WriteHeader(http.StatusAccepted)
 	})
 
-	router := NewRouter(nil, &stubChecker{}, handler, false)
+	router := NewRouter(nil, &stubChecker{}, handler, false, nil)
 	server := httptest.NewServer(router)
 	defer server.Close()
 
@@ -102,7 +104,7 @@ func TestRouterWithMCPHandlerDisabled(t *testing.T) {
 }
 
 func TestRouterWithoutMCPHandler(t *testing.T) {
-	router := NewRouter(nil, &stubChecker{}, nil, false)
+	router := NewRouter(nil, &stubChecker{}, nil, false, nil)
 	server := httptest.NewServer(router)
 	defer server.Close()
 
@@ -122,8 +124,33 @@ func TestRouterWithoutMCPHandler(t *testing.T) {
 	}
 }
 
+func TestMetricsEndpointWithPrometheusHandler(t *testing.T) {
+	promHandler := promhttp.Handler()
+	router := NewRouter(nil, &stubChecker{}, nil, false, promHandler)
+	server := httptest.NewServer(router)
+	defer server.Close()
+
+	resp, err := http.Get(server.URL + "/metrics")
+	if err != nil {
+		t.Fatalf("metrics request failed: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("expected status 200, got %d", resp.StatusCode)
+	}
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatalf("failed reading metrics body: %v", err)
+	}
+	if !strings.Contains(string(body), "# HELP") {
+		t.Fatalf("expected Prometheus exposition format, got: %s", string(body))
+	}
+}
+
 func TestReadyzNilChecker(t *testing.T) {
-	router := NewRouter(nil, nil, nil, false)
+	router := NewRouter(nil, nil, nil, false, nil)
 	server := httptest.NewServer(router)
 	defer server.Close()
 
@@ -142,26 +169,26 @@ type failingWriter struct {
 	status int
 }
 
-func (f *failingWriter) Header() http.Header { return make(http.Header) }
-func (f *failingWriter) WriteHeader(status int) { f.status = status }
+func (f *failingWriter) Header() http.Header       { return make(http.Header) }
+func (f *failingWriter) WriteHeader(status int)    { f.status = status }
 func (f *failingWriter) Write([]byte) (int, error) { return 0, errors.New("write failed") }
 
 func TestWriteJSONErrors(t *testing.T) {
 	rec := httptest.NewRecorder()
-	writeJSON(slog.New(slog.NewJSONHandler(io.Discard, nil)), rec, http.StatusOK, make(chan int))
+	writeJSON(context.Background(), slog.New(slog.NewJSONHandler(io.Discard, nil)), rec, http.StatusOK, make(chan int))
 
 	if rec.Result().StatusCode != http.StatusInternalServerError {
 		t.Fatalf("expected status 500, got %d", rec.Result().StatusCode)
 	}
 
 	rec2 := httptest.NewRecorder()
-	writeJSON(nil, rec2, http.StatusCreated, map[string]string{"status": "ok"})
+	writeJSON(context.Background(), nil, rec2, http.StatusCreated, map[string]string{"status": "ok"})
 	if rec2.Result().StatusCode != http.StatusCreated {
 		t.Fatalf("expected status 201, got %d", rec2.Result().StatusCode)
 	}
 
 	writer := &failingWriter{}
-	writeJSON(slog.New(slog.NewJSONHandler(io.Discard, nil)), writer, http.StatusOK, map[string]string{"foo": "bar"})
+	writeJSON(context.Background(), slog.New(slog.NewJSONHandler(io.Discard, nil)), writer, http.StatusOK, map[string]string{"foo": "bar"})
 	if writer.status != http.StatusOK {
 		t.Fatalf("expected status written despite write failure, got %d", writer.status)
 	}

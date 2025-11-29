@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"time"
 
+	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
 	"golang.org/x/sync/errgroup"
 
 	"github.com/shini4i/argo-watcher-mcp/internal/argowatcher"
@@ -15,6 +16,7 @@ import (
 	"github.com/shini4i/argo-watcher-mcp/internal/config"
 	"github.com/shini4i/argo-watcher-mcp/internal/httpserver"
 	"github.com/shini4i/argo-watcher-mcp/internal/mcpserver"
+	"github.com/shini4i/argo-watcher-mcp/internal/telemetry"
 )
 
 type mcpRunner interface {
@@ -75,12 +77,44 @@ func (a *Application) Run(ctx context.Context) error {
 		slog.String("http_addr", a.cfg.HTTPListenAddr),
 	)
 
+	provider, err := telemetry.NewProvider(ctx, a.cfg, a.logger)
+	if err != nil {
+		return fmt.Errorf("init telemetry: %w", err)
+	}
+	if provider != nil {
+		defer func() {
+			if shutdownErr := provider.Shutdown(context.Background()); shutdownErr != nil {
+				a.logger.Error("telemetry shutdown failed", "err", shutdownErr)
+			}
+		}()
+	}
+
 	httpClient := &http.Client{
-		Timeout: a.cfg.RequestTimeout,
+		Timeout:   a.cfg.RequestTimeout,
+		Transport: otelhttp.NewTransport(http.DefaultTransport),
 	}
 	defer httpClient.CloseIdleConnections()
 
-	argoClient := argowatcher.New(a.cfg.ArgoWatcherBaseURL, httpClient, a.logger)
+	requestMetrics := telemetry.NoopMCPRequestMetrics()
+	if metrics, err := telemetry.NewMCPRequestMetrics(); err != nil {
+		a.logger.Error("init MCP request metrics", "err", err)
+	} else {
+		requestMetrics = metrics
+	}
+
+	reachabilityMetrics := telemetry.NoopArgoWatcherReachability()
+	if tracker, err := telemetry.NewArgoWatcherReachability(); err != nil {
+		a.logger.Error("init Argo Watcher reachability metrics", "err", err)
+	} else {
+		reachabilityMetrics = tracker
+	}
+
+	argoClient := argowatcher.New(
+		a.cfg.ArgoWatcherBaseURL,
+		httpClient,
+		a.logger,
+		argowatcher.WithReachabilityMetrics(reachabilityMetrics),
+	)
 
 	mcpSrv, err := newMCPServer(mcpserver.Options{
 		Name:    a.cfg.Name,
@@ -88,6 +122,7 @@ func (a *Application) Run(ctx context.Context) error {
 		Service: argoClient,
 		Clock:   a.clock,
 		Logger:  a.logger,
+		Metrics: requestMetrics,
 	})
 	if err != nil {
 		return fmt.Errorf("create mcp server: %w", err)
@@ -105,7 +140,11 @@ func (a *Application) Run(ctx context.Context) error {
 		})
 	case config.TransportModeHTTP:
 		handler := mcpSrv.StreamableHandler()
-		router := newHTTPRouter(a.logger, argoClient, handler, true)
+		var promHandler http.Handler
+		if provider != nil {
+			promHandler = provider.PrometheusHandler
+		}
+		router := newHTTPRouter(a.logger, argoClient, handler, true, promHandler)
 		httpSrv := newHTTPServer(a.cfg.HTTPListenAddr, router)
 
 		group.Go(func() error {

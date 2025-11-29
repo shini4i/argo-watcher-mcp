@@ -4,9 +4,10 @@
 
 A simple service that exposes an [argo-watcher](https://github.com/shini4i/argo-watcher) instance as a set of tools via the Model Context Protocol (MCP), allowing AI agents and other clients to query deployment history.
 
-![GitHub Actions](https://img.shields.io/github/actions/workflow/status/shini4i/argo-watcher-mcp/run-tests.yml?branch=main&style=plastic)
-![codecov](https://img.shields.io/codecov/c/github/shini4i/argo-watcher-mcp?style=plastic&token=E61B6OYPFX)
+![GitHub Actions](https://img.shields.io/github/actions/workflow/status/shini4i/argo-watcher-mcp/go-tests.yml?branch=main&style=plastic)
+![GitHub go.mod Go version](https://img.shields.io/github/go-mod/go-version/shini4i/argo-watcher-mcp?style=plastic)
 ![GitHub release (latest by date)](https://img.shields.io/github/v/release/shini4i/argo-watcher-mcp?style=plastic)
+![codecov](https://img.shields.io/codecov/c/github/shini4i/argo-watcher-mcp?style=plastic&token=E61B6OYPFX)
 ![license](https://img.shields.io/github/license/shini4i/argo-watcher-mcp?style=plastic)
 
 </div>
@@ -78,8 +79,20 @@ A simple service that exposes an [argo-watcher](https://github.com/shini4i/argo-
 | `HTTP_LISTEN_ADDR` | `:8000` | Address for the HTTP/SSE transport. |
 | `TRANSPORT_MODE` | `stdio` | Selects transport: `stdio` for CLI usage or `http` for SSE over HTTP. |
 | `REQUEST_TIMEOUT` | `15s` | HTTP timeout for downstream argo-watcher requests. |
+| `OTEL_ENABLED` | `true` | Enables OpenTelemetry instrumentation; set to `false` to disable all telemetry exports. |
+| `OTEL_SERVICE_NAME` | inherits `APP_NAME` | Overrides the OpenTelemetry `service.name` resource attribute reported by the server. |
+| `OTEL_EXPORTER_OTLP_ENDPOINT` | _none_ | Optional OTLP gRPC endpoint (`host:port`) used for exporting metrics and traces. |
+| `OTEL_EXPORTER_OTLP_INSECURE` | `false` | Set to `true` to allow plaintext OTLP connections when the collector does not use TLS. |
 | `APP_NAME` | `argo-watcher-mcp` | Metadata surfaced via MCP implementation info. |
 | `APP_VERSION` | `0.0.1-dev` | Version surfaced via MCP implementation info. |
+
+### Telemetry & Metrics
+
+When telemetry is enabled, the HTTP transport exposes Prometheus metrics at `/metrics`. Key series:
+
+- `argo_watcher_mcp_requests_total{result="success|invalid|failed"}` – MCP tool call counter partitioned by result label; filter by `result` to obtain invalid or failed counts.
+- `argo_watcher_reachable` – gauge reporting downstream reachability (`1` when Argo Watcher responded successfully, `0` otherwise).
+- Standard Go runtime (`go_*`) and process metrics are registered on the Prometheus endpoint to aid capacity monitoring.
 
 ## Development
 
