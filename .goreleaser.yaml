@@ -21,7 +21,13 @@ builds:
       - amd64
       - arm64
     ldflags:
-      - -s -w
+      # Stamp the release version into the binary so it reports itself correctly
+      # over MCP without the operator setting APP_VERSION. Mirrors how Argo
+      # Watcher stamps its own version, including using `.Version` — so a
+      # `v1.2.3` tag reports as `1.2.3` in both projects. GoReleaser's default
+      # ldflags target main.version, which this project does not use: the version
+      # lives with the rest of the configuration defaults.
+      - -s -w -X github.com/shini4i/argo-watcher-mcp/internal/config.defaultVersion={{.Version}}
 
 # dockers_v2 builds one multi-platform image and pushes the tags below, which
 # replaces the previous pair of per-arch `dockers` entries plus the
