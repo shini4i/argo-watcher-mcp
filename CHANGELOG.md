@@ -44,6 +44,8 @@ and remains the only required setting.
   with `HTTP_LISTEN_ADDR`.
 - `REQUEST_TIMEOUT` bounds outbound calls to argo-watcher.
 - Published container images now carry a software bill of materials.
+- Released binaries report their own release version to MCP clients, so
+  `APP_VERSION` only needs setting to override it.
 
 > [!NOTE]
 > `get_reachability` needs argo-watcher's `/api/v1/reachability` endpoint, which

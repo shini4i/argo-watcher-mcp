@@ -161,7 +161,7 @@ upstream until v0.13.0 lands.
 | `OTEL_EXPORTER_OTLP_ENDPOINT` | _none_ | Optional OTLP gRPC endpoint (`host:port`) used for exporting metrics and traces. |
 | `OTEL_EXPORTER_OTLP_INSECURE` | `false` | Set to `true` to allow plaintext OTLP connections when the collector does not use TLS. |
 | `APP_NAME` | `argo-watcher-mcp` | Metadata surfaced via MCP implementation info. |
-| `APP_VERSION` | `0.0.1-dev` | Version surfaced via MCP implementation info. |
+| `APP_VERSION` | build-stamped (`0.0.1-dev` for local builds) | Version surfaced via MCP implementation info. Release binaries have their version linked in, so this only needs setting to override it. |
 
 ### Telemetry & Metrics
 

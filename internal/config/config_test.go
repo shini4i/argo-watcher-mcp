@@ -145,3 +145,52 @@ func TestLoadInvalidTransportMode(t *testing.T) {
 		t.Fatalf("expected invalid transport mode error, got %v", err)
 	}
 }
+
+// The version reported to MCP clients comes from the build-time default when
+// APP_VERSION is absent. Release builds patch defaultVersion via -ldflags, so a
+// regression here would make every released binary misreport itself.
+func TestLoadVersionFallsBackToBuildTimeDefault(t *testing.T) {
+	t.Setenv("ARGO_WATCHER_URL", "http://localhost:8001")
+
+	testCases := []struct {
+		name       string
+		appVersion string
+		setEnv     bool
+		want       string
+	}{
+		{name: "unset", setEnv: false, want: defaultVersion},
+		{name: "explicitlyEmpty", appVersion: "", setEnv: true, want: defaultVersion},
+		{name: "envWins", appVersion: "9.9.9", setEnv: true, want: "9.9.9"},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			if tc.setEnv {
+				t.Setenv("APP_VERSION", tc.appVersion)
+			} else {
+				if err := os.Unsetenv("APP_VERSION"); err != nil {
+					t.Fatalf("unset APP_VERSION: %v", err)
+				}
+			}
+
+			cfg, err := Load()
+			if err != nil {
+				t.Fatalf("Load() error = %v", err)
+			}
+			if cfg.Version != tc.want {
+				t.Fatalf("expected version %q, got %q", tc.want, cfg.Version)
+			}
+			if cfg.Version == "" {
+				t.Fatal("version must never be reported as an empty string")
+			}
+		})
+	}
+}
+
+// defaultVersion must remain a linker-patchable variable: a const, or moving the
+// value back into an envDefault tag, silently breaks -X injection.
+func TestDefaultVersionIsNotEmpty(t *testing.T) {
+	if defaultVersion == "" {
+		t.Fatal("defaultVersion must have a fallback value for non-release builds")
+	}
+}

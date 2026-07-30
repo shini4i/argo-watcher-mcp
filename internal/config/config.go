@@ -15,13 +15,25 @@ const (
 	TransportModeHTTP = "http"
 )
 
+// defaultVersion is reported when APP_VERSION is not set.
+//
+// Release builds overwrite it at link time, so a released binary identifies
+// itself correctly without the operator having to set anything:
+//
+//	-ldflags "-X github.com/shini4i/argo-watcher-mcp/internal/config.defaultVersion=1.2.3"
+//
+// It must stay a var rather than a const, and cannot move into an `envDefault`
+// struct tag, because the linker can only patch variables.
+var defaultVersion = "0.0.1-dev"
+
 // Config aggregates environment-driven settings for the server.
 type Config struct {
 	// Name identifies the MCP server instance.
 	Name string `env:"APP_NAME" envDefault:"argo-watcher-mcp"`
 
-	// Version is reported via MCP metadata.
-	Version string `env:"APP_VERSION" envDefault:"0.0.1-dev"`
+	// Version is reported via MCP metadata. Defaults to the version stamped in
+	// at build time; see defaultVersion.
+	Version string `env:"APP_VERSION"`
 
 	// HTTPListenAddr is the address the HTTP server binds to.
 	HTTPListenAddr string `env:"HTTP_LISTEN_ADDR" envDefault:":8000"`
@@ -55,6 +67,12 @@ func Load() (Config, error) {
 
 	if err := env.Parse(&cfg); err != nil {
 		return Config{}, fmt.Errorf("parse environment: %w", err)
+	}
+
+	// An unset or empty APP_VERSION falls back to the build-time version rather
+	// than reporting an empty string to MCP clients.
+	if cfg.Version == "" {
+		cfg.Version = defaultVersion
 	}
 
 	cfg.TransportMode = strings.ToLower(cfg.TransportMode)
