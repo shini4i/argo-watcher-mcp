@@ -17,88 +17,52 @@ A simple service that exposes an [argo-watcher](https://github.com/shini4i/argo-
 
 ## Features
 
-- Exposes argo-watcher's read-only API as MCP tools, so an agent can answer what
-  was deployed, when, by whom, and whether it succeeded.
-- Filter deployment history by application, status, and time range, with
-  pagination and an explicit truncation signal.
-- Surfaces the deploy lock, dependency reachability, and instance configuration.
-- Runs over stdio and HTTP (streamable SSE) via the official MCP Go SDK.
-- Packaged as a production-ready Docker container.
-- Modular, testable Go architecture.
+- Exposes argo-watcher's read-only API as MCP tools: what was deployed, when, by
+  whom, and whether it succeeded.
+- Also surfaces the deploy lock, dependency reachability, and instance config.
+- Runs over stdio or HTTP (streamable SSE) via the official MCP Go SDK.
+- Multi-platform distroless container image.
 
 > [!NOTE]
-> Only read operations are exposed. This server cannot create deployments or
-> change the deploy lock, by design.
+> Read-only by design: this server cannot create deployments or change the deploy
+> lock.
 
 ## Tools
 
 | Tool | Answers | Upstream endpoint |
 |------|---------|-------------------|
 | `get_deployments` | What was deployed, when, by whom, with which image tags, and whether it succeeded, failed, or was a rollback. | `GET /api/v1/tasks` |
-| `get_deploy_lock` | Are deployments currently frozen (manually or by a scheduled lockdown)? | `GET /api/v1/deploy-lock` |
-| `get_reachability` | Can argo-watcher currently reach ArgoCD and its state backend? | `GET /api/v1/reachability` |
+| `get_deploy_lock` | Are deployments currently frozen? | `GET /api/v1/deploy-lock` |
+| `get_reachability` | Can argo-watcher reach ArgoCD and its state backend? | `GET /api/v1/reachability` |
 | `get_server_info` | Which argo-watcher version is running, and how is it configured? | `GET /api/v1/version`, `GET /api/v1/config` |
 
-### Deployment history and pagination
+Parameters and constraints live in each tool's MCP schema. Two things it does not
+tell you:
 
-`get_deployments` accepts `app`, `status`, `days_history` (or `from_timestamp` /
-`to_timestamp`), `limit`, and `offset`. Results are ordered newest first.
-
-`limit` defaults to **50** and may not exceed **1000**, the cap argo-watcher
-enforces on its task endpoint. Every response reports:
-
-- `total` — how many deployments matched the filter in full, ignoring pagination.
-- `truncated` — `true` when deployments remain *after this page*. Note an
-  `offset` past the end reports `false`: nothing remains, even though `total` is
-  larger than the page.
-
-Check `truncated` before counting or aggregating; a page that silently stopped at
-the cap otherwise reads as a complete history.
-
-An **empty result is ambiguous**. argo-watcher's task query returns HTTP 200 with
-an empty list both when nothing matched and when its database is unreachable, so
-`get_deployments` cannot tell the two apart. Call `get_reachability` before
-concluding that nothing was deployed — it reports `cannot connect to database`
-in the outage case.
-
-Valid `status` values are those argo-watcher accepts: `in progress`, `deployed`,
-`failed`, `cancelled`, `aborted`, `accepted`, `app not found`,
-`argocd is unavailable`, `failed to login to argocd`, and
-`cannot connect to database`.
-
-argo-watcher does not support filtering by author, so questions about a specific
-person require fetching the relevant window and filtering the results.
-
-`get_server_info` forwards an explicit allowlist of configuration fields rather
-than the whole payload, so a field added upstream cannot reach an LLM's context
-without a deliberate change here. Two further reductions apply:
-
-- Auth and notification integrations (`oidc`, `webhook`, `mattermost`) are cut
-  down to their `enabled` flag. Their URLs and channel IDs are not forwarded.
-- URL-valued fields have any `user:password@` component stripped. argo-watcher
-  takes `ARGO_URL_ALIAS` and `DOCKER_IMAGES_PROXY` verbatim from the environment
-  and does not redact them, so a registry proxy behind basic auth would otherwise
-  put its credentials in the response.
+- `get_deployments` returns 50 rows by default and 1000 at most, so check `total`
+  and `truncated` before counting. An empty result can also mean argo-watcher's
+  database is unreachable; `get_reachability` distinguishes the two.
+- `get_server_info` forwards an allowlist of config fields, reduces `oidc`,
+  `webhook` and `mattermost` to their `enabled` flag, and strips
+  `user:password@` from URL-valued fields — argo-watcher does not redact
+  `ARGO_URL_ALIAS` or `DOCKER_IMAGES_PROXY` itself.
 
 ### Required argo-watcher version
 
-The tools depend on upstream features added at different times. Against an older
-argo-watcher, unknown query parameters are **silently ignored** rather than
-rejected, so a filter can appear to apply when it did not.
+Older versions silently ignore unknown query parameters, so a filter can appear
+to apply when it did not.
 
 | Feature | Minimum argo-watcher |
 |---------|----------------------|
-| `total` (accurate counts), `get_deploy_lock` | v0.10.0 |
+| `total`, `get_deploy_lock` | v0.10.0 |
 | `status` filter | v0.10.2 |
 | `is_rollback` / `rollback_target_id` | v0.11.0 |
-| `limit` / `offset` pagination | v0.12.0 |
+| `limit` / `offset` | v0.12.0 |
 | `get_reachability` | v0.13.0 |
 
-**v0.12.0 or newer is recommended** for everything except `get_reachability`,
-which needs the `/api/v1/reachability` endpoint. That endpoint is not in any
-stable argo-watcher release yet — it currently ships only in
-`v0.13.0-pre.20260726` — so `get_reachability` will fail against a stable
-upstream until v0.13.0 lands.
+v0.12.0+ is recommended. `get_reachability` needs `/api/v1/reachability`, which
+has no stable release yet (only `v0.13.0-pre.20260726`), so it fails against
+current stable upstream.
 
 ## Prerequisites
 
@@ -141,12 +105,14 @@ upstream until v0.13.0 lands.
 4. **(Optional) Run via Docker**
 
    ```bash
-   GOOS=linux GOARCH=amd64 go build -o argo-watcher-mcp ./cmd/server
-   docker build -t argo-watcher-mcp .
+   GOOS=linux GOARCH=amd64 go build -o linux/amd64/argo-watcher-mcp ./cmd/server
+   docker build --build-arg TARGETPLATFORM=linux/amd64 -t argo-watcher-mcp .
    docker run --rm -p 8000:8000 \
      -e ARGO_WATCHER_URL="http://host.docker.internal:8001" \
      argo-watcher-mcp
    ```
+
+   For the real multi-platform images, use `goreleaser release --snapshot --clean`.
 
 ## Configuration
 
@@ -161,7 +127,7 @@ upstream until v0.13.0 lands.
 | `OTEL_EXPORTER_OTLP_ENDPOINT` | _none_ | Optional OTLP gRPC endpoint (`host:port`) used for exporting metrics and traces. |
 | `OTEL_EXPORTER_OTLP_INSECURE` | `false` | Set to `true` to allow plaintext OTLP connections when the collector does not use TLS. |
 | `APP_NAME` | `argo-watcher-mcp` | Metadata surfaced via MCP implementation info. |
-| `APP_VERSION` | build-stamped (`local` otherwise) | Version surfaced via MCP implementation info. Release binaries have their version linked in, so this only needs setting to override it. Matches argo-watcher's convention: a `v1.2.3` tag reports as `1.2.3`, and an unstamped build reports `local`. |
+| `APP_VERSION` | build-stamped (`local` otherwise) | Version surfaced via MCP implementation info. Releases link it in; set this only to override. |
 
 ### Telemetry & Metrics
 
