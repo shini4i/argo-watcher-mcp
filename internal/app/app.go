@@ -38,6 +38,12 @@ var (
 		return &http.Server{
 			Addr:    addr,
 			Handler: handler,
+			// Without a header deadline, a client can hold a connection open
+			// indefinitely by dribbling out partial headers (Slowloris) until the
+			// server runs out of capacity. This endpoint takes no authentication,
+			// so anyone who can reach it can do that. Argo Watcher itself sets the
+			// same bound on its own router.
+			ReadHeaderTimeout: 10 * time.Second,
 		}
 	}
 )
