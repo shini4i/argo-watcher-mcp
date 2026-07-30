@@ -65,18 +65,14 @@ and remains the only required setting.
 - Rewritten from Python to Go, and distributed as a static binary in a distroless
   image. Configuration is compatible: `ARGO_WATCHER_URL` keeps its name and
   meaning.
-- Container images are published as `:<version>` and `:latest` only. Both are
-  multi-platform and resolve to `linux/amd64` or `linux/arm64` automatically.
+- Container images are now multi-platform: `:v0.3.0` and `:latest` each resolve to
+  `linux/amd64` or `linux/arm64` automatically. Earlier tags were amd64 only.
 
 ### Removed
 
 - **Breaking:** the `validated` and `timeout` fields no longer appear on
   deployments. argo-watcher does not serialise either one, so both always read as
   their zero value — reporting them invited treating `validated: false` as fact.
-- **Breaking:** architecture-suffixed image tags such as
-  `:<version>-linux-amd64` and `:latest-linux-arm64` are no longer published.
-  They only ever existed as intermediates behind the multi-platform tags; use the
-  plain tag instead.
 
 ### Fixed
 

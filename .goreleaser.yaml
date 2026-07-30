@@ -29,14 +29,13 @@ builds:
       # lives with the rest of the configuration defaults.
       - -s -w -X github.com/shini4i/argo-watcher-mcp/internal/config.defaultVersion={{.Version}}
 
-# dockers_v2 builds one multi-platform image and pushes the tags below, which
-# replaces the previous pair of per-arch `dockers` entries plus the
-# `docker_manifests` that stitched them together.
 dockers_v2:
   - images:
       - ghcr.io/shini4i/argo-watcher-mcp
+    # `.Tag` keeps the v prefix, matching the images already published for this
+    # package and argo-watcher's own tags.
     tags:
-      - "{{ .Version }}"
+      - "{{ .Tag }}"
       - latest
     dockerfile: Dockerfile
     ids:
@@ -44,6 +43,10 @@ dockers_v2:
     platforms:
       - linux/amd64
       - linux/arm64
+    flags:
+      - "--pull"
+    # dockers_v2 defaults this to true, set explicitly while it is experimental.
+    sbom: "true"
     labels:
       org.opencontainers.image.created: "{{ .Date }}"
       org.opencontainers.image.revision: "{{ .FullCommit }}"
