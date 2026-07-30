@@ -1189,12 +1189,14 @@ func TestProjectConfigStripsCredentialsFromURLValuedFields(t *testing.T) {
 	client := New("http://example.com", &mockHTTPClient{}, nil)
 
 	got := client.projectConfig(map[string]any{
-		"registry_proxy_url": "https://robot$puller:s3cr3t-token@registry.example.com/v2",
+		// Schemeless is the conventional form for a registry reference, so cover
+		// it here rather than only the scheme-bearing shape.
+		"registry_proxy_url": "robot$puller:s3cr3t-token@registry.example.com/v2",
 		"argo_cd_url_alias":  "https://admin:hunter2@argocd.public.example.com",
 	})
 
 	for key, want := range map[string]string{
-		"registry_proxy_url": "https://registry.example.com/v2",
+		"registry_proxy_url": "registry.example.com/v2",
 		"argo_cd_url_alias":  "https://argocd.public.example.com",
 	} {
 		value, ok := got[key].(string)
@@ -1236,6 +1238,38 @@ func TestRedactURLUserinfo(t *testing.T) {
 		},
 		// A bare host with no scheme still parses, as a path — nothing to strip.
 		{name: "schemelessHost", raw: "registry.example.com", want: "registry.example.com", wantOK: true},
+
+		// Schemeless values are the conventional way to write a registry
+		// reference, and url.Parse reads "user:pass@host" as scheme "user" with an
+		// opaque remainder, so userinfo here is invisible without normalising the
+		// value first. These are the cases a naive url.Parse lets through intact.
+		{
+			name:   "schemelessUserAndPassword",
+			raw:    "user:pass@registry.example.com/v2",
+			want:   "registry.example.com/v2",
+			wantOK: true,
+		},
+		{
+			name:   "schemelessUserOnly",
+			raw:    "admin@registry.example.com",
+			want:   "registry.example.com",
+			wantOK: true,
+		},
+		{
+			name:   "schemelessPreservesPortAndPath",
+			raw:    "robot:tok@registry.example.com:5000/v2/library",
+			want:   "registry.example.com:5000/v2/library",
+			wantOK: true,
+		},
+		// Already scheme-relative: must not be double-prefixed, and must still be
+		// redacted.
+		{
+			name:   "schemeRelativeWithUserinfo",
+			raw:    "//user:pass@registry.example.com/v2",
+			want:   "//registry.example.com/v2",
+			wantOK: true,
+		},
+
 		// Unparseable values are dropped rather than guessed at.
 		{name: "controlCharacter", raw: "https://u:p@host\x7f.example.com", wantOK: false},
 	}

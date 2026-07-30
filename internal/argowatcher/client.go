@@ -437,16 +437,36 @@ func redactURLUserinfo(raw string) (string, bool) {
 		return "", true
 	}
 
-	parsed, err := url.Parse(raw)
+	// url.Parse only recognises an authority — and any userinfo inside it — when
+	// the value carries a "//" marker. A schemeless "user:pass@host/path" instead
+	// parses as scheme "user" with the remainder as an opaque blob, leaving User
+	// nil and the credential intact. Registry references are conventionally
+	// written without a scheme, so that is a likely shape for
+	// DOCKER_IMAGES_PROXY rather than an exotic one. Parse such values behind a
+	// placeholder marker, then drop it again so the value keeps its original form.
+	hasAuthorityMarker := strings.Contains(raw, "://") || strings.HasPrefix(raw, "//")
+	candidate := raw
+	if !hasAuthorityMarker {
+		candidate = "//" + raw
+	}
+
+	parsed, err := url.Parse(candidate)
 	if err != nil {
 		return "", false
 	}
+	// Only ever rewrite a value that actually carries userinfo; anything else is
+	// returned byte-for-byte, so a shape this parsing does not model cannot be
+	// mangled on the way through.
 	if parsed.User == nil {
 		return raw, true
 	}
 
 	parsed.User = nil
-	return parsed.String(), true
+	redacted := parsed.String()
+	if !hasAuthorityMarker {
+		redacted = strings.TrimPrefix(redacted, "//")
+	}
+	return redacted, true
 }
 
 // flattenURL renders a decoded net/url.URL object back into a URL string. It
