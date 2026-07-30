@@ -317,12 +317,15 @@ func (c *Client) GetServerInfo(ctx context.Context) (domain.ServerInfo, error) {
 
 // exposedConfigKeys lists the /api/v1/config fields forwarded to MCP clients.
 //
-// Argo Watcher already tags every credential `json:"-"`, so nothing secret
-// reaches this client today. The allowlist guards the next release rather than
-// this one: forwarding the payload wholesale would mean any field upstream adds
-// later — a webhook URL, a state-backend DSN, a token — lands in an LLM's
-// context and in client transcripts with no code change and no review. An
-// allowlist turns that into a deliberate edit.
+// Argo Watcher tags every field it considers a credential `json:"-"`, so no
+// declared secret reaches this client. The allowlist guards the next release
+// rather than this one: forwarding the payload wholesale would mean any field
+// upstream adds later — a webhook URL, a state-backend DSN, a token — lands in
+// an LLM's context and in client transcripts with no code change and no review.
+// An allowlist turns that into a deliberate edit.
+//
+// Being allowlisted is not the same as being safe to forward verbatim: see
+// urlValuedConfigKeys for fields whose value can itself embed a credential.
 var exposedConfigKeys = map[string]struct{}{
 	"argo_cd_url":          {},
 	"argo_cd_url_alias":    {},
@@ -342,6 +345,17 @@ var exposedConfigKeys = map[string]struct{}{
 // Their remaining fields describe how to reach a third-party service and are the
 // likeliest future home of a credential, so only the flag is forwarded.
 var integrationKeys = []string{"oidc", "webhook", "mattermost"}
+
+// urlValuedConfigKeys are allowlisted fields whose value is a URL string Argo
+// Watcher takes verbatim from the environment (ARGO_URL_ALIAS and
+// DOCKER_IMAGES_PROXY). Neither is redacted upstream, and a registry proxy or an
+// externally-published ArgoCD URL can legitimately be written with basic-auth
+// userinfo — `https://user:password@host`. Forwarding that would hand the
+// credential to an LLM, so the userinfo is stripped before the value leaves here.
+//
+// argo_cd_url needs no entry: it arrives as a decoded net/url.URL object and
+// flattenURL rebuilds it without the User field.
+var urlValuedConfigKeys = []string{"argo_cd_url_alias", "registry_proxy_url"}
 
 // projectConfig reduces the upstream config payload to the allowlisted fields.
 //
@@ -371,6 +385,26 @@ func (c *Client) projectConfig(cfg map[string]any) map[string]any {
 		}
 	}
 
+	for _, key := range urlValuedConfigKeys {
+		raw, present := projected[key]
+		if !present {
+			continue
+		}
+		// Anything but a string means upstream changed the field's shape. Drop it
+		// rather than forward a value this code cannot reason about.
+		asString, ok := raw.(string)
+		if !ok {
+			delete(projected, key)
+			continue
+		}
+		redacted, ok := redactURLUserinfo(asString)
+		if !ok {
+			delete(projected, key)
+			continue
+		}
+		projected[key] = redacted
+	}
+
 	for _, key := range integrationKeys {
 		nested, ok := cfg[key].(map[string]any)
 		if !ok {
@@ -390,6 +424,30 @@ func (c *Client) projectConfig(cfg map[string]any) map[string]any {
 
 // argoURLKey is the config field carrying the ArgoCD base URL.
 const argoURLKey = "argo_cd_url"
+
+// redactURLUserinfo strips any `user:password@` component from a URL string,
+// leaving the rest intact so the value stays useful for building links.
+//
+// It reports false for a value that does not parse as a URL: an unparseable
+// string cannot be sanitised with any confidence, and dropping it is preferable
+// to forwarding something that might carry a credential in a shape this code
+// does not recognise.
+func redactURLUserinfo(raw string) (string, bool) {
+	if raw == "" {
+		return "", true
+	}
+
+	parsed, err := url.Parse(raw)
+	if err != nil {
+		return "", false
+	}
+	if parsed.User == nil {
+		return raw, true
+	}
+
+	parsed.User = nil
+	return parsed.String(), true
+}
 
 // flattenURL renders a decoded net/url.URL object back into a URL string. It
 // reports false when the value is not that shape — including when it is already

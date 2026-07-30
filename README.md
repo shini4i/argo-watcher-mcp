@@ -70,11 +70,15 @@ argo-watcher does not support filtering by author, so questions about a specific
 person require fetching the relevant window and filtering the results.
 
 `get_server_info` forwards an explicit allowlist of configuration fields rather
-than the whole payload. argo-watcher already excludes every secret from
-`/api/v1/config`, so the allowlist is not guarding today's response — it guards
-the next one, so that a field added upstream cannot reach an LLM's context
-without a deliberate change here. Notification integrations are reduced to their
-`enabled` flag; their URLs and channel IDs are not forwarded.
+than the whole payload, so a field added upstream cannot reach an LLM's context
+without a deliberate change here. Two further reductions apply:
+
+- Auth and notification integrations (`oidc`, `webhook`, `mattermost`) are cut
+  down to their `enabled` flag. Their URLs and channel IDs are not forwarded.
+- URL-valued fields have any `user:password@` component stripped. argo-watcher
+  takes `ARGO_URL_ALIAS` and `DOCKER_IMAGES_PROXY` verbatim from the environment
+  and does not redact them, so a registry proxy behind basic auth would otherwise
+  put its credentials in the response.
 
 ### Required argo-watcher version
 

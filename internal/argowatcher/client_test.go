@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -1177,5 +1178,94 @@ func TestJSONTimestampUnmarshal(t *testing.T) {
 				t.Fatalf("got %s, want %s", ts.Time, tc.want)
 			}
 		})
+	}
+}
+
+// Argo Watcher takes ARGO_URL_ALIAS and DOCKER_IMAGES_PROXY verbatim from the
+// environment and does not redact them, so an operator using a registry proxy
+// behind basic auth has the credential sitting in /api/v1/config. It must not
+// reach an MCP client.
+func TestProjectConfigStripsCredentialsFromURLValuedFields(t *testing.T) {
+	client := New("http://example.com", &mockHTTPClient{}, nil)
+
+	got := client.projectConfig(map[string]any{
+		"registry_proxy_url": "https://robot$puller:s3cr3t-token@registry.example.com/v2",
+		"argo_cd_url_alias":  "https://admin:hunter2@argocd.public.example.com",
+	})
+
+	for key, want := range map[string]string{
+		"registry_proxy_url": "https://registry.example.com/v2",
+		"argo_cd_url_alias":  "https://argocd.public.example.com",
+	} {
+		value, ok := got[key].(string)
+		if !ok {
+			t.Fatalf("expected %q to be forwarded as a string, got %#v", key, got[key])
+		}
+		if value != want {
+			t.Fatalf("expected %q redacted to %q, got %q", key, want, value)
+		}
+		if strings.Contains(value, "@") {
+			t.Fatalf("%q still carries userinfo: %q", key, value)
+		}
+	}
+
+	// The secrets must not survive anywhere in the projection.
+	for _, secret := range []string{"s3cr3t-token", "hunter2", "robot$puller", "admin"} {
+		if strings.Contains(fmt.Sprintf("%v", got), secret) {
+			t.Fatalf("secret %q leaked into the projected config: %#v", secret, got)
+		}
+	}
+}
+
+func TestRedactURLUserinfo(t *testing.T) {
+	testCases := []struct {
+		name   string
+		raw    string
+		want   string
+		wantOK bool
+	}{
+		{name: "empty", raw: "", want: "", wantOK: true},
+		{name: "noUserinfo", raw: "https://registry.example.com/v2", want: "https://registry.example.com/v2", wantOK: true},
+		{name: "userAndPassword", raw: "https://u:p@host.example.com", want: "https://host.example.com", wantOK: true},
+		{name: "userOnly", raw: "https://u@host.example.com", want: "https://host.example.com", wantOK: true},
+		{
+			name:   "preservesPathQueryAndPort",
+			raw:    "https://u:p@host.example.com:8443/v2/base?ns=lib",
+			want:   "https://host.example.com:8443/v2/base?ns=lib",
+			wantOK: true,
+		},
+		// A bare host with no scheme still parses, as a path — nothing to strip.
+		{name: "schemelessHost", raw: "registry.example.com", want: "registry.example.com", wantOK: true},
+		// Unparseable values are dropped rather than guessed at.
+		{name: "controlCharacter", raw: "https://u:p@host\x7f.example.com", wantOK: false},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			got, ok := redactURLUserinfo(tc.raw)
+			if ok != tc.wantOK {
+				t.Fatalf("ok = %v, want %v (got %q)", ok, tc.wantOK, got)
+			}
+			if !tc.wantOK {
+				return
+			}
+			if got != tc.want {
+				t.Fatalf("got %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
+// Upstream changing a URL field's type is a shape this code cannot sanitise, so
+// the field is dropped rather than forwarded.
+func TestProjectConfigDropsNonStringURLField(t *testing.T) {
+	client := New("http://example.com", &mockHTTPClient{}, nil)
+
+	got := client.projectConfig(map[string]any{
+		"registry_proxy_url": map[string]any{"Host": "registry.example.com"},
+	})
+
+	if _, present := got["registry_proxy_url"]; present {
+		t.Fatalf("expected a non-string URL field to be dropped, got %#v", got["registry_proxy_url"])
 	}
 }
