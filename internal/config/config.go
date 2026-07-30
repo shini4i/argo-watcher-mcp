@@ -24,7 +24,14 @@ const (
 //
 // It must stay a var rather than a const, and cannot move into an `envDefault`
 // struct tag, because the linker can only patch variables.
-var defaultVersion = "0.0.1-dev"
+//
+// "local" mirrors Argo Watcher, which stamps the same GoReleaser `.Version`
+// into its own package-level version var and uses "local" for builds that were
+// not produced by a release. Keeping the sentinel identical means an unstamped
+// binary reads the same way across both projects. The name differs from
+// upstream's plain `version` because here it really is only a default:
+// APP_VERSION overrides it, which upstream has no equivalent of.
+var defaultVersion = "local"
 
 // Config aggregates environment-driven settings for the server.
 type Config struct {

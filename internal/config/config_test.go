@@ -189,8 +189,15 @@ func TestLoadVersionFallsBackToBuildTimeDefault(t *testing.T) {
 
 // defaultVersion must remain a linker-patchable variable: a const, or moving the
 // value back into an envDefault tag, silently breaks -X injection.
-func TestDefaultVersionIsNotEmpty(t *testing.T) {
+//
+// The sentinel is pinned to "local" to match Argo Watcher, so an unstamped
+// binary reads the same way across both projects. Change it only if upstream
+// changes too.
+func TestDefaultVersionSentinel(t *testing.T) {
 	if defaultVersion == "" {
 		t.Fatal("defaultVersion must have a fallback value for non-release builds")
+	}
+	if defaultVersion != "local" {
+		t.Fatalf("expected the sentinel to match argo-watcher's \"local\", got %q", defaultVersion)
 	}
 }
