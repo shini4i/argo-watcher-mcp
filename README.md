@@ -17,15 +17,88 @@ A simple service that exposes an [argo-watcher](https://github.com/shini4i/argo-
 
 ## Features
 
-- Exposes argo-watcher deployment tasks as an MCP tool.
-- Filter deployments by application name and time range.
+- Exposes argo-watcher's read-only API as MCP tools, so an agent can answer what
+  was deployed, when, by whom, and whether it succeeded.
+- Filter deployment history by application, status, and time range, with
+  pagination and an explicit truncation signal.
+- Surfaces the deploy lock, dependency reachability, and instance configuration.
 - Runs over stdio and HTTP (streamable SSE) via the official MCP Go SDK.
 - Packaged as a production-ready Docker container.
 - Modular, testable Go architecture.
 
+> [!NOTE]
+> Only read operations are exposed. This server cannot create deployments or
+> change the deploy lock, by design.
+
+## Tools
+
+| Tool | Answers | Upstream endpoint |
+|------|---------|-------------------|
+| `get_deployments` | What was deployed, when, by whom, with which image tags, and whether it succeeded, failed, or was a rollback. | `GET /api/v1/tasks` |
+| `get_deploy_lock` | Are deployments currently frozen (manually or by a scheduled lockdown)? | `GET /api/v1/deploy-lock` |
+| `get_reachability` | Can argo-watcher currently reach ArgoCD and its state backend? | `GET /api/v1/reachability` |
+| `get_server_info` | Which argo-watcher version is running, and how is it configured? | `GET /api/v1/version`, `GET /api/v1/config` |
+
+### Deployment history and pagination
+
+`get_deployments` accepts `app`, `status`, `days_history` (or `from_timestamp` /
+`to_timestamp`), `limit`, and `offset`. Results are ordered newest first.
+
+`limit` defaults to **50** and may not exceed **1000**, the cap argo-watcher
+enforces on its task endpoint. Every response reports:
+
+- `total` — how many deployments matched the filter in full, ignoring pagination.
+- `truncated` — `true` when deployments remain *after this page*. Note an
+  `offset` past the end reports `false`: nothing remains, even though `total` is
+  larger than the page.
+
+Check `truncated` before counting or aggregating; a page that silently stopped at
+the cap otherwise reads as a complete history.
+
+An **empty result is ambiguous**. argo-watcher's task query returns HTTP 200 with
+an empty list both when nothing matched and when its database is unreachable, so
+`get_deployments` cannot tell the two apart. Call `get_reachability` before
+concluding that nothing was deployed — it reports `cannot connect to database`
+in the outage case.
+
+Valid `status` values are those argo-watcher accepts: `in progress`, `deployed`,
+`failed`, `cancelled`, `aborted`, `accepted`, `app not found`,
+`argocd is unavailable`, `failed to login to argocd`, and
+`cannot connect to database`.
+
+argo-watcher does not support filtering by author, so questions about a specific
+person require fetching the relevant window and filtering the results.
+
+`get_server_info` forwards an explicit allowlist of configuration fields rather
+than the whole payload. argo-watcher already excludes every secret from
+`/api/v1/config`, so the allowlist is not guarding today's response — it guards
+the next one, so that a field added upstream cannot reach an LLM's context
+without a deliberate change here. Notification integrations are reduced to their
+`enabled` flag; their URLs and channel IDs are not forwarded.
+
+### Required argo-watcher version
+
+The tools depend on upstream features added at different times. Against an older
+argo-watcher, unknown query parameters are **silently ignored** rather than
+rejected, so a filter can appear to apply when it did not.
+
+| Feature | Minimum argo-watcher |
+|---------|----------------------|
+| `total` (accurate counts), `get_deploy_lock` | v0.10.0 |
+| `status` filter | v0.10.2 |
+| `is_rollback` / `rollback_target_id` | v0.11.0 |
+| `limit` / `offset` pagination | v0.12.0 |
+| `get_reachability` | v0.13.0 |
+
+**v0.12.0 or newer is recommended** for everything except `get_reachability`,
+which needs the `/api/v1/reachability` endpoint. That endpoint is not in any
+stable argo-watcher release yet — it currently ships only in
+`v0.13.0-pre.20260726` — so `get_reachability` will fail against a stable
+upstream until v0.13.0 lands.
+
 ## Prerequisites
 
-- Go 1.25+ (for local builds and development).
+- Go 1.26+ (for local builds and development).
 - Docker 24+ (optional, for containerized deployment).
 - [Task](https://taskfile.dev) 3.x (optional, to use the provided Taskfile).
 - A running instance of [argo-watcher](https://github.com/shini4i/argo-watcher).

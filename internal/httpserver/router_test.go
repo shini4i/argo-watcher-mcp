@@ -193,3 +193,96 @@ func TestWriteJSONErrors(t *testing.T) {
 		t.Fatalf("expected status written despite write failure, got %d", writer.status)
 	}
 }
+
+func TestShouldTraceRequest(t *testing.T) {
+	testCases := []struct {
+		name        string
+		method      string
+		path        string
+		accept      string
+		contentType string
+		body        string
+		want        bool
+	}{
+		{name: "metricsExcluded", method: http.MethodGet, path: "/metrics", want: false},
+		{name: "healthzExcluded", method: http.MethodGet, path: "/healthz", want: false},
+		{name: "readyzExcluded", method: http.MethodGet, path: "/readyz", want: false},
+		{name: "sseStreamExcluded", method: http.MethodGet, path: "/", accept: "text/event-stream", want: false},
+		{name: "plainGetTraced", method: http.MethodGet, path: "/", want: true},
+
+		// Handshake methods carry no application work.
+		{name: "initialize", method: http.MethodPost, path: "/", contentType: "application/json", body: `{"method":"initialize"}`, want: false},
+		{name: "notificationsInitialized", method: http.MethodPost, path: "/", contentType: "application/json", body: `{"method":"notifications/initialized"}`, want: false},
+		{name: "serverDiscover", method: http.MethodPost, path: "/", contentType: "application/json", body: `{"method":"server/discover"}`, want: false},
+		{name: "subscriptionsListen", method: http.MethodPost, path: "/", contentType: "application/json", body: `{"method":"subscriptions/listen"}`, want: false},
+		{name: "toolsList", method: http.MethodPost, path: "/", contentType: "application/json", body: `{"method":"tools/list"}`, want: false},
+		{name: "ping", method: http.MethodPost, path: "/", contentType: "application/json", body: `{"method":"ping"}`, want: false},
+
+		// Case is normalised before the lookup.
+		{name: "mixedCaseHandshake", method: http.MethodPost, path: "/", contentType: "application/json", body: `{"method":"Server/Discover"}`, want: false},
+
+		// Real work, and anything unrecognised, stays traced.
+		{name: "toolsCallTraced", method: http.MethodPost, path: "/", contentType: "application/json", body: `{"method":"tools/call"}`, want: true},
+		{name: "emptyMethodTraced", method: http.MethodPost, path: "/", contentType: "application/json", body: `{"method":""}`, want: true},
+		{name: "malformedBodyTraced", method: http.MethodPost, path: "/", contentType: "application/json", body: `{not json`, want: true},
+		{name: "nonJSONPostTraced", method: http.MethodPost, path: "/", contentType: "text/plain", body: "hello", want: true},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			req := httptest.NewRequest(tc.method, tc.path, strings.NewReader(tc.body))
+			if tc.accept != "" {
+				req.Header.Set("Accept", tc.accept)
+			}
+			if tc.contentType != "" {
+				req.Header.Set("Content-Type", tc.contentType)
+			}
+
+			if got := shouldTraceRequest(req); got != tc.want {
+				t.Fatalf("shouldTraceRequest() = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
+
+// shouldTraceRequest consumes the request body to read the JSON-RPC method and
+// must put it back intact, at any size. If this regresses, MCP POSTs reach the
+// handler with a drained or truncated body and the server stops answering while
+// every other test still passes.
+func TestShouldTraceRequestRestoresBody(t *testing.T) {
+	testCases := []struct {
+		name string
+		body string
+	}{
+		{
+			name: "smallBody",
+			body: `{"method":"tools/call","params":{"name":"get_deployments"}}`,
+		},
+		{
+			// Larger than the filter's 1 KiB inspection window. Protocol
+			// 2026-07-28 carries clientCapabilities in every request's _meta, so
+			// real requests do reach this size.
+			name: "bodyLargerThanInspectionWindow",
+			body: `{"method":"tools/call","params":{"name":"get_deployments","padding":"` +
+				strings.Repeat("x", 2048) + `"}}`,
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			req := httptest.NewRequest(http.MethodPost, "/", strings.NewReader(tc.body))
+			req.Header.Set("Content-Type", "application/json")
+
+			shouldTraceRequest(req)
+
+			replayed, err := io.ReadAll(req.Body)
+			if err != nil {
+				t.Fatalf("read body after filter: %v", err)
+			}
+			if string(replayed) != tc.body {
+				t.Fatalf("body was not restored intact: got %d bytes, want %d",
+					len(replayed), len(tc.body))
+			}
+		})
+	}
+}

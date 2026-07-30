@@ -155,10 +155,19 @@ func shouldTraceRequest(req *http.Request) bool {
 		trace = false
 		reason = "sse_stream"
 	} else if req.Method == http.MethodPost && strings.Contains(req.Header.Get("Content-Type"), "application/json") {
+		// Read only enough to find the JSON-RPC method, then put those bytes back
+		// in front of the untouched remainder. Replacing the body with just the
+		// prefix would hand the handler truncated JSON for any request over the
+		// limit, and this filter runs on every JSON-RPC POST — so a large request
+		// would fail to parse with the cause buried in a tracing filter. Protocol
+		// 2026-07-28 puts clientCapabilities in each request's _meta, which pushes
+		// bodies closer to this limit than earlier revisions did.
+		//
+		// The original body is deliberately not closed: net/http closes the
+		// request body itself once the handler returns.
 		const maxBodySize = 1024
 		body, err := io.ReadAll(io.LimitReader(req.Body, maxBodySize))
-		_ = req.Body.Close()
-		req.Body = io.NopCloser(bytes.NewReader(body))
+		req.Body = io.NopCloser(io.MultiReader(bytes.NewReader(body), req.Body))
 		if err != nil {
 			reason = "body_read_error"
 		} else {
@@ -200,14 +209,24 @@ var excludedPaths = map[string]struct{}{
 	"/readyz":  {},
 }
 
+// handshakeMethods lists JSON-RPC methods that carry no application work, so
+// tracing them would bury the actual tool calls in connection noise.
+//
+// Every entry is a method the MCP Go SDK actually emits. It covers both protocol
+// revisions the SDK speaks: "initialize" plus its "notifications/initialized"
+// follow-up for 2025-11-25 and earlier, and "server/discover" which replaces
+// that handshake in 2026-07-28. The long-lived "subscriptions/listen" stream is
+// excluded for the same reason SSE GETs are — its span would stay open for the
+// whole session. Discovery calls ("*/list") are excluded as client bookkeeping;
+// "tools/call" and the read methods that do real work are deliberately absent
+// so they keep being traced.
 var handshakeMethods = map[string]bool{
 	"initialize":                true,
-	"notifications/subscribe":   true,
-	"notifications/unsubscribe": true,
+	"notifications/initialized": true,
+	"server/discover":           true,
+	"subscriptions/listen":      true,
 	"resources/list":            true,
-	"resources/get":             true,
 	"prompts/list":              true,
-	"capabilities/list":         true,
-	"capabilities/set":          true,
+	"tools/list":                true,
 	"ping":                      true,
 }
