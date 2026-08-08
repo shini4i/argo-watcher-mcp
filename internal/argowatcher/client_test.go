@@ -225,19 +225,34 @@ func TestCheckNoProbeEndpoint(t *testing.T) {
 	}
 }
 
-// An unobserved verdict must not be reported as ready.
-func TestCheckReadinessProbeFailureIsNotReady(t *testing.T) {
-	_, client, _ := newProbeServer(t, map[string]probeResponse{
-		"/livez":  {status: http.StatusOK, body: `{"status":"up"}`},
-		"/readyz": {status: http.StatusInternalServerError, body: "boom"},
-	})
+// An unobserved verdict must not be reported as ready, whatever status carried it.
+func TestCheckReadinessWithoutAProbePayloadIsNotReady(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		status int
+		body   string
+	}{
+		{name: "server error", status: http.StatusInternalServerError, body: "boom"},
+		{name: "2xx web UI shell", status: http.StatusOK, body: "<!doctype html><title>Argo Watcher</title>"},
+		{name: "2xx empty body", status: http.StatusOK, body: ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			_, client, _ := newProbeServer(t, map[string]probeResponse{
+				"/livez":  {status: http.StatusOK, body: `{"status":"up"}`},
+				"/readyz": {status: tc.status, body: tc.body},
+			})
 
-	health, err := client.Check(context.Background())
-	if err != nil {
-		t.Fatalf("expected no error, got %v", err)
-	}
-	if health.Ready || health.Reason != "status 500" {
-		t.Fatalf("expected unready with a status fallback reason, got %+v", health)
+			health, err := client.Check(context.Background())
+			if err != nil {
+				t.Fatalf("expected no error, got %v", err)
+			}
+			if health.Ready {
+				t.Fatalf("expected unready when no verdict was obtained, got %+v", health)
+			}
+			if health.Reason != fmt.Sprintf("status %d carried no probe payload", tc.status) {
+				t.Fatalf("expected the reason to name the missing payload, got %q", health.Reason)
+			}
+		})
 	}
 }
 

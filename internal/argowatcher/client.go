@@ -123,11 +123,15 @@ func (c *Client) upstreamReadiness(ctx context.Context) domain.UpstreamHealth {
 		return domain.UpstreamHealth{Reason: "readiness probe unreachable"}
 	}
 
+	verdict, ok := parseProbeVerdict(body)
+	if !ok {
+		return domain.UpstreamHealth{Reason: fmt.Sprintf("status %d carried no probe payload", status)}
+	}
+
 	if isSuccess(status) {
 		return domain.UpstreamHealth{Ready: true}
 	}
 
-	verdict, _ := parseProbeVerdict(body)
 	return domain.UpstreamHealth{Reason: verdictReason(status, verdict)}
 }
 
