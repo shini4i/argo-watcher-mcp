@@ -79,6 +79,13 @@ const (
 
 const probeBodyLimit = 4 << 10
 
+// probeTimeout bounds each probe independently of REQUEST_TIMEOUT. Argo Watcher's
+// readiness handler pings its state backend, which a hung database blocks, and two
+// sequential probes on the shared 15s client timeout would stall this server's own
+// /readyz past any sane probe deadline — failing it for a slow dependency, which
+// is the outcome the liveness gate exists to avoid.
+const probeTimeout = 2 * time.Second
+
 // probeVerdict is the payload both probe endpoints answer with.
 type probeVerdict struct {
 	Status string `json:"status"`
@@ -137,6 +144,9 @@ func (c *Client) upstreamReadiness(ctx context.Context) domain.UpstreamHealth {
 
 // probe issues a GET against one of Argo Watcher's probe endpoints.
 func (c *Client) probe(ctx context.Context, path string) (int, []byte, error) {
+	ctx, cancel := context.WithTimeout(ctx, probeTimeout)
+	defer cancel()
+
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.baseURL+path, nil)
 	if err != nil {
 		return 0, nil, fmt.Errorf("build probe request for %s: %w", path, err)

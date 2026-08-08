@@ -126,7 +126,7 @@ wiring a readiness probe to it. Every MCP tool works against v0.13.0+ regardless
 | `ARGO_WATCHER_URL` | _none_ (required) | Base URL of the upstream argo-watcher service. |
 | `HTTP_LISTEN_ADDR` | `:8000` | Address for the HTTP/SSE transport. |
 | `TRANSPORT_MODE` | `stdio` | Selects transport: `stdio` for CLI usage or `http` for SSE over HTTP. |
-| `REQUEST_TIMEOUT` | `15s` | HTTP timeout for downstream argo-watcher requests. |
+| `REQUEST_TIMEOUT` | `15s` | HTTP timeout for downstream argo-watcher requests. Does not apply to the probe endpoints, which are bounded separately — see [Health endpoints](#health-endpoints). |
 | `OTEL_ENABLED` | `true` | Enables OpenTelemetry instrumentation; set to `false` to disable all telemetry exports. |
 | `OTEL_SERVICE_NAME` | inherits `APP_NAME` | Overrides the OpenTelemetry `service.name` resource attribute reported by the server. |
 | `OTEL_EXPORTER_OTLP_ENDPOINT` | _none_ | Optional OTLP gRPC endpoint (`host:port`) used for exporting metrics and traces. |
@@ -157,6 +157,10 @@ Alert on `get_reachability` or on argo-watcher's own metrics for that condition.
 `/readyz` returns `503` only when argo-watcher's process does not answer at all —
 including against an upstream too old to serve `/livez`, per
 [Required argo-watcher version](#required-argo-watcher-version).
+
+Each upstream probe is bounded at 2s rather than by `REQUEST_TIMEOUT`, so this
+endpoint answers inside a normal probe deadline even when argo-watcher's readiness
+handler hangs on its state backend.
 
 ### Telemetry & Metrics
 

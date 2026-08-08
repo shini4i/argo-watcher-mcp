@@ -256,6 +256,44 @@ func TestCheckReadinessWithoutAProbePayloadIsNotReady(t *testing.T) {
 	}
 }
 
+// A hung Argo Watcher must not stall this server's own readiness endpoint past a
+// kubelet probe deadline. Its readiness handler pings the state backend, so a hung
+// database is what produces this.
+func TestCheckBoundsEachProbe(t *testing.T) {
+	release := make(chan struct{})
+	t.Cleanup(func() { close(release) })
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/livez" {
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`{"status":"up"}`))
+			return
+		}
+
+		select {
+		case <-release:
+		case <-r.Context().Done():
+		}
+	}))
+	t.Cleanup(srv.Close)
+
+	client := New(srv.URL, srv.Client(), slog.New(slog.NewJSONHandler(io.Discard, nil)))
+
+	start := time.Now()
+	health, err := client.Check(context.Background())
+	elapsed := time.Since(start)
+
+	if err != nil {
+		t.Fatalf("a hung readiness probe must not fail the check, got %v", err)
+	}
+	if health.Ready {
+		t.Fatal("expected unready when the readiness verdict timed out")
+	}
+	if elapsed > 2*probeTimeout {
+		t.Fatalf("expected the probe to be bounded near %s, took %s", probeTimeout, elapsed)
+	}
+}
+
 // The reason on a transport failure must stay bounded: this server serves it on
 // an unauthenticated endpoint, and the Go error names Argo Watcher's host.
 func TestCheckReadinessTransportFailureReasonIsBounded(t *testing.T) {
