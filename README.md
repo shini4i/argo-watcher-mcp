@@ -59,10 +59,15 @@ to apply when it did not.
 | `is_rollback` / `rollback_target_id` | v0.11.0 |
 | `limit` / `offset` | v0.12.0 |
 | `get_reachability` | v0.13.0 |
+| `/readyz` (this server's own readiness check) | unreleased |
 
-v0.12.0+ is recommended. `get_reachability` needs `/api/v1/reachability`, which
-has no stable release yet (only `v0.13.0-pre.20260726`), so it fails against
-current stable upstream.
+v0.13.0+ is recommended; v0.14.0 is the current stable upstream release.
+
+This server's readiness check requires argo-watcher's `/livez` and `/readyz`,
+which arrive with [the probe split](https://github.com/shini4i/argo-watcher/pull/535)
+and are unreleased. Against v0.14.0 and older it reports `503` with
+`no probe payload`, so give this server an upstream that serves them before
+wiring a readiness probe to it. Every MCP tool works against v0.13.0+ regardless.
 
 ## Prerequisites
 
@@ -129,12 +134,36 @@ current stable upstream.
 | `APP_NAME` | `argo-watcher-mcp` | Metadata surfaced via MCP implementation info. |
 | `APP_VERSION` | build-stamped (`local` otherwise) | Version surfaced via MCP implementation info. Releases link it in; set this only to override. |
 
+### Health endpoints
+
+The HTTP transport serves two unauthenticated probe endpoints:
+
+| Endpoint | Reports | Use as |
+|----------|---------|--------|
+| `/healthz` | This process is serving; checks nothing else | Liveness probe |
+| `/readyz` | This process is serving **and** argo-watcher answers | Readiness probe |
+
+`/readyz` deliberately stays `200` when argo-watcher answers but reports itself
+unready — its state backend is down, or it is shutting down. Every replica of this
+server shares one argo-watcher, so failing readiness there would withdraw all of
+them at once and take `get_reachability`, the tool that names the cause, out of
+reach with them. That verdict is reported in the body instead:
+
+```json
+{"status":"ready","argo_watcher":"not_ready","argo_watcher_reason":"state backend unreachable"}
+```
+
+Alert on `get_reachability` or on argo-watcher's own metrics for that condition.
+`/readyz` returns `503` only when argo-watcher's process does not answer at all —
+including against an upstream too old to serve `/livez`, per
+[Required argo-watcher version](#required-argo-watcher-version).
+
 ### Telemetry & Metrics
 
 When telemetry is enabled, the HTTP transport exposes Prometheus metrics at `/metrics`. Key series:
 
 - `argo_watcher_mcp_requests_total{result="success|invalid|failed"}` – MCP tool call counter partitioned by result label; filter by `result` to obtain invalid or failed counts.
-- `argo_watcher_reachable` – gauge reporting downstream reachability (`1` when Argo Watcher responded successfully, `0` otherwise).
+- `argo_watcher_reachable` – gauge reporting downstream reachability (`1` when argo-watcher answered, `0` otherwise). It tracks reachability, not health: an argo-watcher whose readiness probe reports it unready still reads `1`.
 - Standard Go runtime (`go_*`) and process metrics are registered on the Prometheus endpoint to aid capacity monitoring.
 
 ## Development

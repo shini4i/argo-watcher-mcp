@@ -10,6 +10,31 @@ Breaking entries are marked below.
 
 ## [Unreleased]
 
+### Changed
+
+- **Breaking:** the readiness check now probes argo-watcher's `/livez` and
+  `/readyz` instead of `/healthz`, which
+  [its probe split](https://github.com/shini4i/argo-watcher/pull/535) removes.
+  Those endpoints are unreleased upstream: against v0.14.0 and older, `/readyz`
+  here returns `503` with `no probe payload`, so do not wire a readiness probe to
+  this server until its argo-watcher serves them. The MCP tools are unaffected and
+  keep working against v0.13.0+. A pre-split argo-watcher answers `/livez` from
+  the catch-all serving its Web UI, so the probe response is recognised by its
+  JSON payload rather than its status code — an HTML shell at `200` is refused
+  rather than read as healthy.
+- **Breaking:** `/readyz` stays `200` when argo-watcher answers but reports itself
+  unready — state backend down, or shutting down — and names the verdict in the
+  body as `argo_watcher` and `argo_watcher_reason` instead. It previously returned
+  `503`. Every replica shares one argo-watcher, so failing readiness on its state
+  backend withdrew all of them at once and took `get_reachability`, the tool that
+  explains the outage, out of reach with them. `503` is now reserved for an
+  argo-watcher whose process does not answer at all. Alerts that watched this
+  endpoint for a state-backend outage should watch `get_reachability` or
+  argo-watcher's own metrics instead.
+- **Breaking:** `argo_watcher_reachable` follows the same line: it now reads `1`
+  for an argo-watcher that answers while reporting itself unready, where it
+  previously read `0`.
+
 ## [0.3.0] - 2026-07-30
 
 The server is now written in Go, and covers argo-watcher's read-only API rather
