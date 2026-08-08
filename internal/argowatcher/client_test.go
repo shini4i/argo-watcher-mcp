@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -38,6 +40,23 @@ func (m *mockHTTPClient) Do(*http.Request) (*http.Response, error) {
 	return nil, m.respErr
 }
 
+// sequencedHTTPClient serves responses in order, then fails every later call.
+type sequencedHTTPClient struct {
+	responses []*http.Response
+	err       error
+	calls     int
+}
+
+func (s *sequencedHTTPClient) Do(*http.Request) (*http.Response, error) {
+	defer func() { s.calls++ }()
+
+	if s.calls < len(s.responses) {
+		return s.responses[s.calls], nil
+	}
+
+	return nil, s.err
+}
+
 type trackingReachability struct {
 	reachable   int
 	unreachable int
@@ -51,38 +70,256 @@ func (t *trackingReachability) ReportUnreachable() {
 	t.unreachable++
 }
 
-func TestCheckSuccess(t *testing.T) {
+// probeServer answers Argo Watcher's probe endpoints from a table and records
+// the paths asked for. An absent path answers 404.
+type probeServer struct {
+	responses map[string]probeResponse
+	requested []string
+}
+
+type probeResponse struct {
+	status int
+	body   string
+}
+
+func newProbeServer(t *testing.T, responses map[string]probeResponse) (*probeServer, *Client, *trackingReachability) {
+	t.Helper()
+
+	probes := &probeServer{responses: responses}
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/healthz" {
-			t.Errorf("unexpected path %s", r.URL.Path)
+		probes.requested = append(probes.requested, r.URL.Path)
+
+		response, known := probes.responses[r.URL.Path]
+		if !known {
+			w.WriteHeader(http.StatusNotFound)
+			return
 		}
-		w.WriteHeader(http.StatusOK)
+
+		w.WriteHeader(response.status)
+		if response.body != "" {
+			_, _ = w.Write([]byte(response.body))
+		}
 	}))
-	defer srv.Close()
+	t.Cleanup(srv.Close)
 
 	metrics := &trackingReachability{}
-	client := New(srv.URL, srv.Client(), nil, WithReachabilityMetrics(metrics))
-	if err := client.Check(context.Background()); err != nil {
+	return probes, New(srv.URL, srv.Client(), nil, WithReachabilityMetrics(metrics)), metrics
+}
+
+func TestCheckSuccess(t *testing.T) {
+	probes, client, metrics := newProbeServer(t, map[string]probeResponse{
+		"/livez":  {status: http.StatusOK, body: `{"status":"up"}`},
+		"/readyz": {status: http.StatusOK, body: `{"status":"up"}`},
+	})
+
+	health, err := client.Check(context.Background())
+	if err != nil {
 		t.Fatalf("expected no error, got %v", err)
+	}
+	if !health.Ready {
+		t.Fatalf("expected upstream reported ready, got %+v", health)
+	}
+	if health.Reason != "" {
+		t.Fatalf("expected no reason on a ready upstream, got %q", health.Reason)
+	}
+	if got := strings.Join(probes.requested, ","); got != "/livez,/readyz" {
+		t.Fatalf("expected /livez then /readyz, got %s", got)
 	}
 	if metrics.reachable != 1 || metrics.unreachable != 0 {
 		t.Fatalf("expected reachability metrics reachable=1 unreachable=0, got %d/%d", metrics.reachable, metrics.unreachable)
 	}
 }
 
-func TestCheckFailure(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusBadGateway)
-	}))
-	defer srv.Close()
+func TestCheckUnreadyUpstreamStillPasses(t *testing.T) {
+	_, client, metrics := newProbeServer(t, map[string]probeResponse{
+		"/livez":  {status: http.StatusOK, body: `{"status":"up"}`},
+		"/readyz": {status: http.StatusServiceUnavailable, body: `{"status":"down","reason":"state backend unreachable"}`},
+	})
 
-	metrics := &trackingReachability{}
-	client := New(srv.URL, srv.Client(), nil, WithReachabilityMetrics(metrics))
-	if err := client.Check(context.Background()); err == nil {
-		t.Fatalf("expected error, got nil")
+	health, err := client.Check(context.Background())
+	if err != nil {
+		t.Fatalf("an unready upstream must not fail the check, got %v", err)
+	}
+	if health.Ready {
+		t.Fatal("expected upstream reported unready")
+	}
+	if health.Reason != "state backend unreachable" {
+		t.Fatalf("expected Argo Watcher's own reason verbatim, got %q", health.Reason)
+	}
+	// The gauge tracks reachability, not readiness: both probes answered.
+	if metrics.reachable != 1 || metrics.unreachable != 0 {
+		t.Fatalf("expected reachability metrics reachable=1 unreachable=0, got %d/%d", metrics.reachable, metrics.unreachable)
+	}
+}
+
+func TestCheckUnreadyWithoutReasonFallsBackToStatus(t *testing.T) {
+	_, client, _ := newProbeServer(t, map[string]probeResponse{
+		"/livez":  {status: http.StatusOK, body: `{"status":"up"}`},
+		"/readyz": {status: http.StatusServiceUnavailable, body: `{"status":"down"}`},
+	})
+
+	health, err := client.Check(context.Background())
+	if err != nil {
+		t.Fatalf("expected no error, got %v", err)
+	}
+	if health.Ready || health.Reason != "status 503" {
+		t.Fatalf("expected unready with a status fallback reason, got %+v", health)
+	}
+}
+
+func TestCheckLivenessReportsDown(t *testing.T) {
+	_, client, metrics := newProbeServer(t, map[string]probeResponse{
+		"/livez": {status: http.StatusServiceUnavailable, body: `{"status":"down","reason":"shutting down"}`},
+	})
+
+	_, err := client.Check(context.Background())
+	if err == nil {
+		t.Fatal("expected error, got nil")
+	}
+	if !strings.Contains(err.Error(), "shutting down") {
+		t.Fatalf("expected the error to carry Argo Watcher's reason, got %v", err)
 	}
 	if metrics.reachable != 0 || metrics.unreachable != 1 {
 		t.Fatalf("expected reachability metrics reachable=0 unreachable=1, got %d/%d", metrics.reachable, metrics.unreachable)
+	}
+}
+
+// A pre-split Argo Watcher answers /livez from the catch-all serving its Web UI.
+func TestCheckRejectsTheWebUIShell(t *testing.T) {
+	probes, client, metrics := newProbeServer(t, map[string]probeResponse{
+		"/livez": {status: http.StatusOK, body: "<!doctype html><title>Argo Watcher</title>"},
+	})
+
+	_, err := client.Check(context.Background())
+	if err == nil {
+		t.Fatal("expected an error when /livez answers with something other than a probe payload")
+	}
+	if !strings.Contains(err.Error(), "no probe payload") {
+		t.Fatalf("expected the error to name the missing payload, got %v", err)
+	}
+	if got := strings.Join(probes.requested, ","); got != "/livez" {
+		t.Fatalf("expected /readyz not to be consulted, got %s", got)
+	}
+	if metrics.reachable != 0 || metrics.unreachable != 1 {
+		t.Fatalf("expected reachability metrics reachable=0 unreachable=1, got %d/%d", metrics.reachable, metrics.unreachable)
+	}
+}
+
+// Serving no probe endpoint means ARGO_WATCHER_URL points somewhere else, which
+// must be diagnosed by its status rather than blamed on the upstream version.
+func TestCheckNoProbeEndpoint(t *testing.T) {
+	_, client, metrics := newProbeServer(t, nil)
+
+	_, err := client.Check(context.Background())
+	if err == nil {
+		t.Fatal("expected an error when the probe endpoint does not exist")
+	}
+	if !strings.Contains(err.Error(), "status 404") {
+		t.Fatalf("expected the error to report the observed status, got %v", err)
+	}
+	if strings.Contains(err.Error(), "probe payload") {
+		t.Fatalf("a 404 is an unreachable upstream, not a pre-split one, got %v", err)
+	}
+	if metrics.reachable != 0 || metrics.unreachable != 1 {
+		t.Fatalf("expected reachability metrics reachable=0 unreachable=1, got %d/%d", metrics.reachable, metrics.unreachable)
+	}
+}
+
+// An unobserved verdict must not be reported as ready, whatever status carried it.
+func TestCheckReadinessWithoutAProbePayloadIsNotReady(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		status int
+		body   string
+	}{
+		{name: "server error", status: http.StatusInternalServerError, body: "boom"},
+		{name: "2xx web UI shell", status: http.StatusOK, body: "<!doctype html><title>Argo Watcher</title>"},
+		{name: "2xx empty body", status: http.StatusOK, body: ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			_, client, _ := newProbeServer(t, map[string]probeResponse{
+				"/livez":  {status: http.StatusOK, body: `{"status":"up"}`},
+				"/readyz": {status: tc.status, body: tc.body},
+			})
+
+			health, err := client.Check(context.Background())
+			if err != nil {
+				t.Fatalf("expected no error, got %v", err)
+			}
+			if health.Ready {
+				t.Fatalf("expected unready when no verdict was obtained, got %+v", health)
+			}
+			if health.Reason != fmt.Sprintf("status %d carried no probe payload", tc.status) {
+				t.Fatalf("expected the reason to name the missing payload, got %q", health.Reason)
+			}
+		})
+	}
+}
+
+// A hung Argo Watcher must not stall this server's own readiness endpoint past a
+// kubelet probe deadline. Its readiness handler pings the state backend, so a hung
+// database is what produces this.
+func TestCheckBoundsEachProbe(t *testing.T) {
+	release := make(chan struct{})
+	t.Cleanup(func() { close(release) })
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/livez" {
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`{"status":"up"}`))
+			return
+		}
+
+		select {
+		case <-release:
+		case <-r.Context().Done():
+		}
+	}))
+	t.Cleanup(srv.Close)
+
+	client := New(srv.URL, srv.Client(), slog.New(slog.NewJSONHandler(io.Discard, nil)))
+
+	start := time.Now()
+	health, err := client.Check(context.Background())
+	elapsed := time.Since(start)
+
+	if err != nil {
+		t.Fatalf("a hung readiness probe must not fail the check, got %v", err)
+	}
+	if health.Ready {
+		t.Fatal("expected unready when the readiness verdict timed out")
+	}
+	if elapsed > 2*probeTimeout {
+		t.Fatalf("expected the probe to be bounded near %s, took %s", probeTimeout, elapsed)
+	}
+}
+
+// The reason on a transport failure must stay bounded: this server serves it on
+// an unauthenticated endpoint, and the Go error names Argo Watcher's host.
+func TestCheckReadinessTransportFailureReasonIsBounded(t *testing.T) {
+	live := &http.Response{
+		StatusCode: http.StatusOK,
+		Body:       io.NopCloser(strings.NewReader(`{"status":"up"}`)),
+	}
+	metrics := &trackingReachability{}
+	client := New("http://argo-watcher.internal:8080", &sequencedHTTPClient{
+		responses: []*http.Response{live},
+		err:       errors.New("dial tcp 10.1.2.3:8080: connect: connection refused"),
+	}, slog.New(slog.NewJSONHandler(io.Discard, nil)), WithReachabilityMetrics(metrics))
+
+	health, err := client.Check(context.Background())
+	if err != nil {
+		t.Fatalf("a failed readiness probe must not fail the check, got %v", err)
+	}
+	if health.Ready {
+		t.Fatal("expected unready when the readiness verdict could not be obtained")
+	}
+	if health.Reason != "readiness probe unreachable" {
+		t.Fatalf("expected a bounded reason, got %q", health.Reason)
+	}
+	// /livez answered, so the reachability gauge must survive the readiness failure.
+	if metrics.reachable != 1 || metrics.unreachable != 0 {
+		t.Fatalf("expected reachability metrics reachable=1 unreachable=0, got %d/%d", metrics.reachable, metrics.unreachable)
 	}
 }
 
@@ -408,12 +645,12 @@ func TestCheckNetworkError(t *testing.T) {
 	metrics := &trackingReachability{}
 	client := New("http://example.com", &mockHTTPClient{respErr: errors.New("connection refused")}, nil, WithReachabilityMetrics(metrics))
 
-	err := client.Check(context.Background())
+	_, err := client.Check(context.Background())
 	if err == nil {
 		t.Fatal("expected error, got nil")
 	}
-	if !strings.Contains(err.Error(), "health request") {
-		t.Fatalf("expected error to mention health request, got %v", err)
+	if !strings.Contains(err.Error(), "probe /livez") {
+		t.Fatalf("expected error to name the probe, got %v", err)
 	}
 	if metrics.reachable != 0 || metrics.unreachable != 1 {
 		t.Fatalf("expected reachability metrics reachable=0 unreachable=1, got %d/%d", metrics.reachable, metrics.unreachable)
@@ -441,8 +678,8 @@ func TestRequestBuildFailures(t *testing.T) {
 	metrics := &trackingReachability{}
 	client := New(invalidURL, &mockHTTPClient{}, nil, WithReachabilityMetrics(metrics))
 
-	if err := client.Check(context.Background()); err == nil || !strings.Contains(err.Error(), "build health request") {
-		t.Fatalf("expected build health request error, got %v", err)
+	if _, err := client.Check(context.Background()); err == nil || !strings.Contains(err.Error(), "build probe request") {
+		t.Fatalf("expected build probe request error, got %v", err)
 	}
 
 	_, err := client.ListDeployments(context.Background(), domain.DeploymentFilter{FromTimestamp: time.Now().Unix()})

@@ -11,18 +11,26 @@ import (
 	"testing"
 
 	"github.com/prometheus/client_golang/prometheus/promhttp"
+
+	"github.com/shini4i/argo-watcher-mcp/internal/domain"
 )
 
 type stubChecker struct {
-	err error
+	upstream domain.UpstreamHealth
+	err      error
 }
 
-func (s *stubChecker) Check(_ context.Context) error {
-	return s.err
+func (s *stubChecker) Check(_ context.Context) (domain.UpstreamHealth, error) {
+	return s.upstream, s.err
+}
+
+// readyChecker stands in for an argo-watcher that answers and reports itself ready.
+func readyChecker() *stubChecker {
+	return &stubChecker{upstream: domain.UpstreamHealth{Ready: true}}
 }
 
 func TestHealthEndpoints(t *testing.T) {
-	router := NewRouter(nil, &stubChecker{}, nil, false, nil)
+	router := NewRouter(nil, readyChecker(), nil, false, nil)
 	server := httptest.NewServer(router)
 	defer server.Close()
 
@@ -58,12 +66,61 @@ func TestReadinessFailures(t *testing.T) {
 	}
 }
 
+func TestReadinessReportsReadyUpstream(t *testing.T) {
+	router := NewRouter(nil, readyChecker(), nil, false, nil)
+	server := httptest.NewServer(router)
+	defer server.Close()
+
+	resp, err := http.Get(server.URL + "/readyz")
+	if err != nil {
+		t.Fatalf("ready request failed: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200, got %d", resp.StatusCode)
+	}
+
+	body, _ := io.ReadAll(resp.Body)
+	if !strings.Contains(string(body), `"status":"ready"`) {
+		t.Fatalf("unexpected body: %s", string(body))
+	}
+	if strings.Contains(string(body), "argo_watcher") {
+		t.Fatalf("expected no upstream detail on a ready upstream, got %s", string(body))
+	}
+}
+
+// An unready argo-watcher is reported at 200 rather than acted on.
+func TestReadinessReportsUnreadyUpstream(t *testing.T) {
+	checker := &stubChecker{upstream: domain.UpstreamHealth{Reason: "state backend unreachable"}}
+	router := NewRouter(nil, checker, nil, false, nil)
+	server := httptest.NewServer(router)
+	defer server.Close()
+
+	resp, err := http.Get(server.URL + "/readyz")
+	if err != nil {
+		t.Fatalf("ready request failed: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200, got %d", resp.StatusCode)
+	}
+
+	body, _ := io.ReadAll(resp.Body)
+	for _, want := range []string{`"status":"ready"`, `"argo_watcher":"not_ready"`, `"argo_watcher_reason":"state backend unreachable"`} {
+		if !strings.Contains(string(body), want) {
+			t.Fatalf("expected body to contain %s, got %s", want, string(body))
+		}
+	}
+}
+
 func TestRouterWithMCPHandler(t *testing.T) {
 	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusAccepted)
 	})
 
-	router := NewRouter(nil, &stubChecker{}, handler, true, nil)
+	router := NewRouter(nil, readyChecker(), handler, true, nil)
 	server := httptest.NewServer(router)
 	defer server.Close()
 
@@ -85,7 +142,7 @@ func TestRouterWithMCPHandlerDisabled(t *testing.T) {
 		w.WriteHeader(http.StatusAccepted)
 	})
 
-	router := NewRouter(nil, &stubChecker{}, handler, false, nil)
+	router := NewRouter(nil, readyChecker(), handler, false, nil)
 	server := httptest.NewServer(router)
 	defer server.Close()
 
@@ -104,7 +161,7 @@ func TestRouterWithMCPHandlerDisabled(t *testing.T) {
 }
 
 func TestRouterWithoutMCPHandler(t *testing.T) {
-	router := NewRouter(nil, &stubChecker{}, nil, false, nil)
+	router := NewRouter(nil, readyChecker(), nil, false, nil)
 	server := httptest.NewServer(router)
 	defer server.Close()
 
@@ -126,7 +183,7 @@ func TestRouterWithoutMCPHandler(t *testing.T) {
 
 func TestMetricsEndpointWithPrometheusHandler(t *testing.T) {
 	promHandler := promhttp.Handler()
-	router := NewRouter(nil, &stubChecker{}, nil, false, promHandler)
+	router := NewRouter(nil, readyChecker(), nil, false, promHandler)
 	server := httptest.NewServer(router)
 	defer server.Close()
 

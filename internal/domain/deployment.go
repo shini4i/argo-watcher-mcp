@@ -106,7 +106,21 @@ type ArgoWatcher interface {
 	GetServerInfo(ctx context.Context) (ServerInfo, error)
 }
 
-// HealthChecker reports readiness of downstream dependencies.
+// UpstreamHealth carries Argo Watcher's own readiness verdict. Reason names the
+// cause of an unready one in Argo Watcher's wording, or the observed status code
+// where it supplies none.
+type UpstreamHealth struct {
+	Ready  bool
+	Reason string
+}
+
+// HealthChecker reports whether Argo Watcher is answering, and what its own
+// readiness probe says about it.
 type HealthChecker interface {
-	Check(ctx context.Context) error
+	// Check errors only when Argo Watcher's process is not answering. An Argo
+	// Watcher that answers while reporting itself unready is a nil error and an
+	// unready UpstreamHealth: every replica of this server shares one Argo
+	// Watcher, so erroring would withdraw them all at once and take the
+	// get_reachability tool that names the cause out of reach with them.
+	Check(ctx context.Context) (UpstreamHealth, error)
 }

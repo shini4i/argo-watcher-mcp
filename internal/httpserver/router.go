@@ -86,7 +86,8 @@ func NewRouter(logger *slog.Logger, checker domain.HealthChecker, mcpHandler htt
 			return
 		}
 
-		if err := checker.Check(r.Context()); err != nil {
+		upstream, err := checker.Check(r.Context())
+		if err != nil {
 			writeJSON(r.Context(), requestLogger, w, http.StatusServiceUnavailable, map[string]string{
 				"status": "not_ready",
 				"error":  err.Error(),
@@ -94,7 +95,13 @@ func NewRouter(logger *slog.Logger, checker domain.HealthChecker, mcpHandler htt
 			return
 		}
 
-		writeJSON(r.Context(), requestLogger, w, http.StatusOK, map[string]string{"status": "ready"})
+		payload := map[string]string{"status": "ready"}
+		if !upstream.Ready {
+			payload["argo_watcher"] = "not_ready"
+			payload["argo_watcher_reason"] = upstream.Reason
+		}
+
+		writeJSON(r.Context(), requestLogger, w, http.StatusOK, payload)
 	})
 
 	if promHandler != nil {

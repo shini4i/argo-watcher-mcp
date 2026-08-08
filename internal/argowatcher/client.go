@@ -70,35 +70,130 @@ func New(baseURL string, client HTTPClient, logger *slog.Logger, options ...Opti
 	return c
 }
 
-// Check verifies the downstream service is responding on /healthz.
+// Argo Watcher's probe endpoints, introduced by its probe split
+// (shini4i/argo-watcher#535). Releases predating it serve neither.
+const (
+	livenessPath  = "/livez"
+	readinessPath = "/readyz"
+)
+
+const probeBodyLimit = 4 << 10
+
+// probeTimeout bounds each probe independently of REQUEST_TIMEOUT. Argo Watcher's
+// readiness handler pings its state backend, which a hung database blocks, and two
+// sequential probes on the shared 15s client timeout would stall this server's own
+// /readyz past any sane probe deadline — failing it for a slow dependency, which
+// is the outcome the liveness gate exists to avoid.
+const probeTimeout = 2 * time.Second
+
+// probeVerdict is the payload both probe endpoints answer with.
+type probeVerdict struct {
+	Status string `json:"status"`
+	Reason string `json:"reason"`
+}
+
+// Check reports whether Argo Watcher answers, and what its own readiness probe
+// says. The error covers liveness only — see domain.HealthChecker.
 //
-// Note this probes only Argo Watcher's own state backend; it says nothing about
-// whether Argo Watcher can reach ArgoCD. GetReachability answers that.
-func (c *Client) Check(ctx context.Context) error {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.baseURL+"/healthz", nil)
+// Neither probe covers whether Argo Watcher can reach ArgoCD; GetReachability
+// answers that.
+func (c *Client) Check(ctx context.Context) (domain.UpstreamHealth, error) {
+	status, body, err := c.probe(ctx, livenessPath)
 	if err != nil {
 		c.metrics.ReportUnreachable()
-		return fmt.Errorf("build health request: %w", err)
+		return domain.UpstreamHealth{}, err
+	}
+
+	if !isSuccess(status) {
+		c.metrics.ReportUnreachable()
+		verdict, _ := parseProbeVerdict(body)
+		return domain.UpstreamHealth{}, fmt.Errorf("probe %s: %s", livenessPath, verdictReason(status, verdict))
+	}
+
+	if _, ok := parseProbeVerdict(body); !ok {
+		c.metrics.ReportUnreachable()
+		return domain.UpstreamHealth{}, fmt.Errorf("probe %s: status %d carried no probe payload; Argo Watcher predating the probe split does not serve this endpoint", livenessPath, status)
+	}
+
+	c.metrics.ReportReachable()
+	return c.upstreamReadiness(ctx), nil
+}
+
+// upstreamReadiness asks Argo Watcher's readiness probe for its verdict. A
+// verdict it could not obtain is reported unready, never ready.
+func (c *Client) upstreamReadiness(ctx context.Context) domain.UpstreamHealth {
+	status, body, err := c.probe(ctx, readinessPath)
+	if err != nil {
+		// The detail names Argo Watcher's host and port, which this server reports
+		// on an unauthenticated endpoint, so it stays in the log.
+		c.logger.Warn("argo-watcher readiness probe failed", slog.Any("error", err))
+		return domain.UpstreamHealth{Reason: "readiness probe unreachable"}
+	}
+
+	verdict, ok := parseProbeVerdict(body)
+	if !ok {
+		return domain.UpstreamHealth{Reason: fmt.Sprintf("status %d carried no probe payload", status)}
+	}
+
+	if isSuccess(status) {
+		return domain.UpstreamHealth{Ready: true}
+	}
+
+	return domain.UpstreamHealth{Reason: verdictReason(status, verdict)}
+}
+
+// probe issues a GET against one of Argo Watcher's probe endpoints.
+func (c *Client) probe(ctx context.Context, path string) (int, []byte, error) {
+	ctx, cancel := context.WithTimeout(ctx, probeTimeout)
+	defer cancel()
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.baseURL+path, nil)
+	if err != nil {
+		return 0, nil, fmt.Errorf("build probe request for %s: %w", path, err)
 	}
 
 	resp, err := c.client.Do(req)
 	if err != nil {
-		c.metrics.ReportUnreachable()
-		return fmt.Errorf("health request: %w", err)
+		return 0, nil, fmt.Errorf("probe %s: %w", path, err)
 	}
 	defer func() { _ = resp.Body.Close() }()
 
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		c.metrics.ReportUnreachable()
-		return fmt.Errorf("health request: unexpected status %d", resp.StatusCode)
+	body, err := io.ReadAll(io.LimitReader(resp.Body, probeBodyLimit))
+	if err != nil {
+		return 0, nil, fmt.Errorf("read %s response: %w", path, err)
 	}
 
-	if _, err := io.Copy(io.Discard, resp.Body); err != nil {
-		c.metrics.ReportUnreachable()
-		return fmt.Errorf("drain response body: %w", err)
+	return resp.StatusCode, body, nil
+}
+
+// parseProbeVerdict decodes a probe payload, reporting false for a body that is
+// not one — the Web UI shell, or whatever else answers a URL that is not an Argo
+// Watcher.
+func parseProbeVerdict(body []byte) (probeVerdict, bool) {
+	var verdict probeVerdict
+	if err := json.Unmarshal(body, &verdict); err != nil {
+		return probeVerdict{}, false
 	}
-	c.metrics.ReportReachable()
-	return nil
+
+	if strings.TrimSpace(verdict.Status) == "" {
+		return probeVerdict{}, false
+	}
+
+	return verdict, true
+}
+
+// verdictReason prefers Argo Watcher's own explanation, falling back to the
+// status code when it supplies none.
+func verdictReason(status int, verdict probeVerdict) string {
+	if reason := strings.TrimSpace(verdict.Reason); reason != "" {
+		return reason
+	}
+
+	return fmt.Sprintf("status %d", status)
+}
+
+func isSuccess(status int) bool {
+	return status >= 200 && status < 300
 }
 
 // getJSON issues a GET against endpoint and decodes the JSON body into out.
